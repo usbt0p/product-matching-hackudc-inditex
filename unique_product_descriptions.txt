@@ -1,0 +1,13 @@
+woman
+man
+kid
+baby
+head
+neck
+top garment
+upper body clothing
+bottom garment
+lower body clothing
+shoes
+feet
+

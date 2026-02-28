@@ -1,0 +1,112 @@
+cuello camisa
+corbatas
+cinturones
+hebillas de cinturones
+faldas
+joyería
+pulseras
+scrunchies
+
+# si hay 2 zapatos o guantes, tratar los dos como un solo objeto para ahorrar en el round robin
+
+# intentar focusear en la cara con una segmentacion, y buscas si se detectan cosas específicas.
+
+# METER UN THRESHOLD DE CONFIANZA EN SEGMENTACION de dino, para detectar mujeres, hombres, niños
+# habria que usar la info en train (categorias 1, 2, 3) para precomputar un mapa de prendas que se asocian con bundles 
+# masculinos, femeninos y niños
+
+# también se puede usar salidas dino con palabras clave para dar "pistas" de lo que pueden ser ciertas partes o prendas;
+# si creamos un mapa por ejemplo que asocie camisas con cuello, etc, o que use corbatas para pedir filtrado por corbatas especificamente
+
+# o por ejemplo, con dino "upper body" y "lower body" se puede usar para filtrar por prendas de arriba y abajo
+# precomputar un mapa de prendas que se asocian con upper body y lower body, o con la cara (mascaras, gafas, gorros...)
+
+# hace pre-selecciones: top 20 , y luego top 5 del top 20 
+
+# estas eran las palabras filtradas que usaba antes!!! por ahora no usar, pero son las que serian utiles para filtrar por tipo de prenda
+3/4 COAT
+ACCESSORIES
+ANKLE BOOT
+ANORAK
+ACCESORIES
+BERMUDAS
+BONNET
+JACKET
+OUTFIT
+POLO SHIRT
+PYJAMA
+ROMPER SUIT
+TRACKSUIT
+WIND-JACKET
+DRESS GOWN
+SANDAL
+BELT
+BERMUDA
+BLAZER
+BOOT
+BOWTIE
+BRA
+CARDIGAN
+COAT
+DRESS
+FLAT BOOT
+FLAT SHOES
+GLASSES
+GLOVES
+HAND BAG
+RUCKSACK
+HAT
+HEELED ANKLE BOOT
+HEELED BOOT
+HEELED SHOE
+HIGH TOP
+HOME SHOE
+KNITTED
+LEGGINGS
+MATCHES
+MOCCASINS
+NEWBORN
+NEWBORN TRICOT
+NIGHTIE
+PYJAMAS
+OVERALL
+OVERSHIRT
+PANTY
+UNDERPANT
+PARKA
+POLO SHIRT
+PURSE WALLET
+RAIN BOOT
+RUNNING SHOES
+SANDAL
+SCARF
+SHAWL
+FOULARD
+SHIRT
+SHOES
+SHORTS
+SKIRT
+SLEEVELESS PAD. JACKET
+SOCKS
+SPORT SHOES
+SPORTY SANDAL
+STATIONERY
+STOCKINGS-TIGHTS
+SUSPENDERS
+SWEATER
+SWEATSHIRT
+SWIMSUIT
+T-SHIRT
+TIE
+TOP
+TOWEL
+TRAINERS
+TRENCH RAINCOAT
+TROUSERS
+UMBRELLA
+UNDERWEAR
+UNIFORM
+WAISTCOAT
+WALLETS
+WEDGE
+WIND-JACKET

@@ -2,6 +2,12 @@
 
 > **Zara / Inditex challenge** — given a photo of a person wearing clothes, find the exact products from the Inditex catalogue.
 
+| | |
+|:---:|:---:|
+| ![Image 1](imgs/1.png) | ![Image 2](imgs/2.png) |
+| ![Image 3](imgs/3.png) | ![Image 4](imgs/4.png) |
+
+
 > [!WARNING]
 > **Este repo fue vibecodeado en un hackathon de madrudada con 3 horas de sueño en un lapso de 36 horas.** El código funciona, pero no está organizado para producción. Y no es bonito. De hecho, es feo. Hay scripts experimentales por todas partes, archivos temporales y decisiones tomadas a las 5 de la madrugada. Estás avisado. Lo refinaré cuando pueda, pero funciona para el objetivo que tiene.
 

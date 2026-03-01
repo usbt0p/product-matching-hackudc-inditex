@@ -14,6 +14,10 @@ __pycache__
 *.ts
 .env
 *.png
+!imgs/1.png
+!imgs/2.png
+!imgs/3.png
+!imgs/4.png
 *.jpg
 *.npy
 *.json

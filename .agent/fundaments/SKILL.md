@@ -45,6 +45,7 @@ When editing existing code:
 When your changes create orphans:
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
+- Ensure no contamination of the global packages; use virtual environments.
 
 The test: Every changed line should trace directly to the user's request.
 

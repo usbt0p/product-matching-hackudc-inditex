@@ -1,43 +1,103 @@
-# Fashion Retrieval Pipeline 🚀
+# Inditex Fashion Retrieval — HackUDC 2026
 
-This repository contains an advanced Two-Stage Multimodal AI Pipeline designed to match messy real-world photography `bundles` against standard studio `products` for the Inditex fashion retrieval challenge.
+> **Zara / Inditex challenge** — given a photo of a person wearing clothes, find the exact products from the Inditex catalogue.
 
-## 🛠️ Pipeline Flow
+> [!WARNING]
+> **Este repo fue vibecodeado en un hackathon de madrudada con 3 horas de sueño en un lapso de 36 horas.** El código funciona, pero no está organizado para producción. Y no es bonito. De hecho, es feo. Hay scripts experimentales por todas partes, archivos temporales y decisiones tomadas a las 5 de la madrugada. Estás avisado. Lo refinaré cuando pueda, pero funciona para el objetivo que tiene.
 
-The workflow is decoupled into dedicated, modular steps to maximize speed and logic separation:
+---
 
-### 1. Data Downloading 📥
-* **Script:** `download_images.py`
-* **What it does:** Downloads all Zara images from their CDNs concurrently (making sure it isn't blocked by 403s limits), saving them into local nested directories `data/bundles/` and `data/products/` locally so subsequent embeddings won't be I/O bounded ever again.
+## ¿Qué hace esto?
 
-### 2. Zero-Shot Detection & Region of Interest (ROI) 🔍
-* **Script:** `run_detector.py`
-* **What it does:** Uses `Grounding DINO` (a State-of-the-Art language-image object detector) to automatically detect any clothing, garment, bag or shoes inside a `bundle` photo, regardless of what it is. It then **crops** these items so background noise is ignored and saves them into the `bundle_crops/` directory.
+Dada una foto de "bundle" (outfit, modelo en la calle, campaña de ropa), localizamos cada prenda y buscamos los 15 productos más parecidos del catálogo de Inditex. La métrica es **Recall@15**.
 
-### 3. Catalog Embedding Storage 🧠
-* **Script:** `run_cache_clip.py`
-* **What it does:** Loading all 27,000+ catalog studio images every time we want to predict would be madness. This scripts takes the fashion catalog and converts every piece into dense mathematical vectors (features/embeddings) using **Marqo-FashionSigLIP** (a model exclusively fine-tuned for high fashion). The result gets cached into a fast numpy `.npy` file. *(Note: We also precomputed DINOv2 embeddings in `catalog_embeddings.npy`)*.
+El pipeline tiene tres etapas:
 
-### 4. Dual-Ensemble Retrieval & Inference 🎯
-* **Script:** `run_retrieval_v2.py`
-* **What it does:** The grand finale. It reads all our isolated cropped bounding boxes (`bundle_crops/`) and embeds them through **both** DINOv2 (perfect for shapes/textures/seams) and FashionSigLIP (perfect for conceptual/style matching). It calculates the 50/50 averaged cosine similarity between the cropped image and the 27,000 possibilities, outputting the `Top 15` most similar products in `submission_level2.csv`.
-* *Bonus:* It has size constraints built-in to skip ultra-small bad crops that DINO accidentally highlights.
-
-### (Optional / Broken) Background Removal 🖼️
-* **Script:** `run_background_removal.py`
-* **What it does:** Tries to use `rembg` (U-Net) to completely remove complex street-views from crops, standardizing the background to plain white. *Currently skipped* because it generates too many artifacts that confuse embedding networks.
-
-## 🚀 How to Run End-to-End
-```bash
-# 1. Download database locally (takes ~30 mins due to Zara rate limits)
-python download_images.py
-
-# 2. Extract crops for the test bundles
-python run_detector.py
-
-# 3. Create Fashion CLIP memory cache
-python run_cache_clip.py
-
-# 4. Generate final predictions (Top 15 per bundle)
-python run_retrieval_v2.py
 ```
+Bundle foto → Detección de prendas → Embeddings → Búsqueda en catálogo → Top-15
+```
+
+Decidí tratar el problema como uno de búsqueda / recuperación de información, y no centrarme tanto en finetuning de modelos, etc. Básicamente, al hacer similaridad entre embeddings de query y catálogo, el problema se reduce a una búsqueda de vecinos cercanos, pero intentando refinar al máximo la respuesta.
+
+---
+
+## Técnicas implementadas
+
+### 🔍 Detección de prendas
+- **YOLOv8-Clothing** como detector principal de crops, estos actuan como las queries de búsqueda para el catálogo de prendas
+- **Slot Filling Router** (`compare_models.py`): combina tres modelos (Grounding DINO + YOLOS-Fashionpedia + YOLOv8) y los enruta a slots semánticos UPPER / LOWER / SHOES / DEFAULT usando un sistema de votación con IoU
+
+### 🧠 Embeddings
+- **GR-Lite** (backbone DINOv3 de Meta, fine-tuneado por otra peña) como extractor de features visual, mucho mejor que CLIP para ropa. Es estado del arte y obtiene muy buenos embeddings para ropa.
+- **SuperDomainMapper** (`train_mapper.py`): red neuronal simple que corrige el domain gap entre fotos de campaña y fotos de producto de catálogo. Es simplemente un mapeo lineal entre embeddings de entrada y embeddings de salida, con algo de dropout y regularización. Entrenada con:
+  - Temperatura aprendible (à la CLIP / SigLIP). Te quitas un hiperparámetro de encima
+  - Online Hard Negative Mining — solo los negativos más difíciles del batch: se elige un porcentaje de negativos más difíciles para entrenar, ya que la red aprende a generalizar mejor con menos datos
+  - Manifold MixUp sobre embeddings para regularizar (sumar embeddings de vecinos cercanos) (similar a la idea de los Variational Autoencoders, hacer que los embeddings de vecinos cercanos sean similares y que el espacio de embeddings sea "transitable")
+  - Scheduler OneCycleLR con warmup automático (esto la vdd no sabia muy bien lo que era)
+
+### 🔎 Búsqueda
+- **Alpha Query Expansion (AQE / α-QE)**: antes de buscar los 15 finales, "limpiamos" el embedding de la query fusionándolo con sus vecinos más cercanos del catálogo. Arrastra la predicción al centro del cluster correcto. Es opcional.
+- **Temporal Proximity Weighting**: las URLs de Inditex llevan un timestamp (`ts=`) que indica cuándo se subió la imagen. Prendas de la misma temporada tienen timestamps similares → aplicamos una campana de Gauss para bonificar productos sincrónicos y penalizar los de otras colecciones. Hay que aprovechar todos los datos!
+- **Semantic Filtering** (`semantic_filtering.py`): filtrado adicional por zona corporal usando las detecciones de DINO como referencia macro. No aporta una gran ganancia pero es un guardrail útil.
+
+### 🔬 LoRA fine-tuning
+- `train_lora.py`: fine-tunea el backbone GR-Lite directamente sobre los pares bundle↔producto con LoRA + Gradient Checkpointing + Gradient Accumulation para no petar la 3090 (si peta estando en remoto estoy cocinado).
+
+---
+
+## Archivos principales
+
+| Archivo | Para qué sirve |
+|---|---|
+| `run_slot_filling_submission_no_postprocess.py` | **El script principal.** Genera el CSV de submission final |
+| `compare_models.py` | Slot Filling Router: combina DINO + YOLOS + YOLOv8 en slots semánticos |
+| `train_mapper.py` | SuperDomainMapper: cierra el domain gap bundle→catálogo |
+| `train_lora.py` | Fine-tuning LoRA del backbone GR-Lite |
+| `semantic_filtering.py` | Filtrado por zona corporal basado en metadatos semánticos |
+| `precompute_dino.py` | Precalcula cajas "macro" de Grounding DINO para los bundles de test |
+| `download_images.py` | Descarga imágenes de producto desde las URLs CDN |
+| `visual_debug_yolos_no_nms.py` | Debug visual del pipeline de detección |
+| `unique_product_descriptions.txt` | Lista de descripciones únicas de producto para el prompt de DINO |
+| `requirements.txt` | Dependencias del proyecto |
+| `LICENSE.md` | Apache 2.0 |
+
+---
+
+## Setup
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+# Necesitas un HF_TOKEN en .env para GR-Lite
+echo "HF_TOKEN=hf_..." > .env
+```
+
+```bash
+# Precomputar embeddings del catálogo (una vez)
+python run_gr_lite.py
+
+# Precomputar cajas DINO para test (una vez)
+python precompute_dino.py
+
+# Entrenar el Domain Mapper (opcional, mejora resultados)
+python train_mapper.py
+
+# Generar submission
+python run_slot_filling_submission_no_postprocess.py
+
+# Para visualizar predicciones de un bundle en particular
+python visual_debug_yolos_no_nms.py
+
+# Y para ver detecciones y su agregacion con el slot filling router
+python compare_models.py
+```
+
+---
+
+## Licencia
+
+Apache 2.0 — ver [LICENSE.md](LICENSE.md). Open source, úsalo como quieras.
+
+---
+
+~ usbt0p :coffee:

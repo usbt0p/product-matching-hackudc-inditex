@@ -115,16 +115,23 @@ def main(alpha_query=False, use_lora=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     
-    # Load Domain Mapper — prefer Super (full state_dict), fall back to legacy (proj-only)
+    # Load Domain Mapper — priority: XBM > Super > Legacy
     domain_mapper = None
+    xbm_path    = "domain_mapper_xbm.pt"
     super_path  = "domain_mapper_super.pt"
     legacy_path = "domain_mapper.pt"
-    if os.path.exists(super_path):
+    if os.path.exists(xbm_path):
+        print("\nLoading XBM DomainMapper...")
+        domain_mapper = ResidualDomainMapper(dim=1024).to(device)
+        domain_mapper.load_state_dict(torch.load(xbm_path, map_location=device, weights_only=True))
+        domain_mapper.eval()
+        print(f"XBM DomainMapper loaded (temp ≈ {1/domain_mapper.logit_scale.exp().item():.4f})")
+    elif os.path.exists(super_path):
         print("\nLoading SuperDomainMapper...")
         domain_mapper = ResidualDomainMapper(dim=1024).to(device)
         domain_mapper.load_state_dict(torch.load(super_path, map_location=device, weights_only=True))
         domain_mapper.eval()
-        print(f"SuperDomainMapper loaded (logit_scale temp ≈ {1/domain_mapper.logit_scale.exp().item():.4f})")
+        print(f"SuperDomainMapper loaded (temp ≈ {1/domain_mapper.logit_scale.exp().item():.4f})")
     elif os.path.exists(legacy_path):
         print("\nLoading legacy Domain Mapper (proj-only)...")
         domain_mapper = ResidualDomainMapper(dim=1024).to(device)
@@ -311,7 +318,17 @@ def main(alpha_query=False, use_lora=False):
                 normalized_emb = emb / norm
             
             sims = np.dot(normalized_catalog, normalized_emb).flatten()
-            
+
+            # Garbage filter: skip crops where even the best catalog match is too weak
+            # (farolas, fondos, bolsos ajenos). Threshold on raw cosine before cubing.
+            if np.max(sims) < 0.20:
+                continue
+
+            # Similarity sharpening: x^3 amplifies the gap between confident top-1
+            # and uncertain lower-ranked items. Safe because sims ∈ [-1,1] and the
+            # mapper output is normalized — in practice almost all values are > 0.
+            sims = sims ** 3
+
             # Temporal Proximity Weighting
             current_bundle_ts = bundle_ts_map.get(bid, 0)
             if current_bundle_ts > 0:

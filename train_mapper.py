@@ -53,11 +53,7 @@ ResidualDomainMapper = SuperDomainMapper
 
 
 def hard_negative_info_nce_loss(preds, targets, logit_scale, margin=0.15, hard_ratio=0.15):
-    """InfoNCE con Online Hard Negative Mining (OHNM) y temperatura aprendible.
-
-    Solo el Top-`hard_ratio` de negativos (los más confusos del batch) contribuye
-    al gradiente, forzando a la red a aprender discriminación fina.
-    """
+    """InfoNCE con Online Hard Negative Mining (OHNM) y temperatura aprendible."""
     scale = torch.clamp(logit_scale.exp(), max=100.0)
     sim_matrix = torch.matmul(preds, targets.T) * scale
 
@@ -81,6 +77,32 @@ def hard_negative_info_nce_loss(preds, targets, logit_scale, margin=0.15, hard_r
 
     labels = torch.zeros(preds.size(0), dtype=torch.long, device=preds.device)
     return F.cross_entropy(hard_logits, labels)
+
+
+def memory_bank_loss(preds, targets, memory_bank, logit_scale, margin=0.1, smoothing=0.15):
+    """InfoNCE con Cross-Batch Memory (XBM) y Label Smoothing.
+
+    - El positivo siempre es índice 0 en los logits.
+    - Los negativos incluyen el batch actual (~511) + la memoria histórica (~8192).
+    - Label smoothing evita que el modelo colapse con pseudo-etiquetas ruidosas.
+    """
+    scale = torch.clamp(logit_scale.exp(), max=100.0)
+
+    # Positivo con margen
+    pos_sim = (preds * targets).sum(dim=-1, keepdim=True) - margin
+
+    # Negativos del batch actual (excluye la diagonal)
+    neg_sim_batch = torch.matmul(preds, targets.T)
+    eye = torch.eye(preds.size(0), device=preds.device, dtype=torch.bool)
+    neg_sim_batch.masked_fill_(eye, -1e9)
+
+    # Negativos históricos del banco de memoria
+    neg_sim_memory = torch.matmul(preds, memory_bank.T)
+
+    # Concatenar: [positivo | batch_negs | memory_negs]
+    logits = torch.cat([pos_sim, neg_sim_batch, neg_sim_memory], dim=1) * scale
+    labels = torch.zeros(preds.size(0), dtype=torch.long, device=preds.device)
+    return F.cross_entropy(logits, labels, label_smoothing=smoothing)
 
 
 def train_super_mapper(X_bundles, Y_products, epochs=600, lr=3e-4):
@@ -152,6 +174,94 @@ def train_super_mapper(X_bundles, Y_products, epochs=600, lr=3e-4):
         temp = mapper.logit_scale.exp().item()
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/batches:.4f} | Temp: {1/temp:.4f} | LR: {current_lr:.2e}")
+
+    torch.optim.swa_utils.update_bn(loader, swa_model)
+    return swa_model.module
+
+
+def train_xbm_mapper(X_bundles, Y_products, epochs=500, lr=3e-4, mem_size=8192):
+    """SuperDomainMapper con Cross-Batch Memory (XBM) + Label Smoothing + SWA.
+
+    La memoria FIFO guarda los últimos `mem_size` embeddings de producto,
+    ampliando el campo de negativos de ~511 (batch) a ~8703 sin coste de VRAM extra.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    mapper = SuperDomainMapper().to(device)
+    optimizer = optim.AdamW(mapper.parameters(), lr=lr, weight_decay=1e-3)
+
+    dataset = TensorDataset(
+        torch.tensor(X_bundles).float(),
+        torch.tensor(Y_products).float()
+    )
+    loader = DataLoader(dataset, batch_size=512, shuffle=True)
+
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=lr,
+        steps_per_epoch=max(1, len(loader)),
+        epochs=epochs,
+        pct_start=0.1,
+        anneal_strategy='cos',
+        div_factor=25,
+        final_div_factor=1e4,
+    )
+
+    swa_model   = AveragedModel(mapper)
+    swa_start   = int(epochs * 0.8)  # SWA arranca en el último 20%
+
+    # Banco de memoria inicializado aleatoriamente (normalizado)
+    memory_bank = F.normalize(torch.randn(mem_size, 1024), dim=1).to(device)
+    ptr = 0
+
+    for epoch in range(epochs):
+        mapper.train()
+        total_loss = 0.0
+        batches = 0
+
+        for b_emb, p_emb in loader:
+            b_emb, p_emb = b_emb.to(device), p_emb.to(device)
+            optimizer.zero_grad()
+
+            # MixUp conservador (alpha=0.2)
+            if np.random.rand() < 0.3:
+                lam = float(np.random.beta(0.2, 0.2))
+                idx = torch.randperm(b_emb.size(0), device=device)
+                b_emb = F.normalize(lam * b_emb + (1 - lam) * b_emb[idx], p=2, dim=-1)
+                p_emb = F.normalize(lam * p_emb + (1 - lam) * p_emb[idx], p=2, dim=-1)
+
+            mapped_b = mapper(b_emb)
+            loss = memory_bank_loss(mapped_b, p_emb, memory_bank, mapper.logit_scale)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(mapper.parameters(), 1.0)
+            optimizer.step()
+
+            if epoch < swa_start:
+                scheduler.step()
+
+            # Actualizar banco FIFO con los embeddings de producto del batch actual
+            bs = p_emb.size(0)
+            with torch.no_grad():
+                end = ptr + bs
+                if end <= mem_size:
+                    memory_bank[ptr:end] = p_emb.detach()
+                else:
+                    overflow = end - mem_size
+                    memory_bank[ptr:] = p_emb[:-overflow].detach()
+                    memory_bank[:overflow] = p_emb[-overflow:].detach()
+                ptr = end % mem_size
+
+            total_loss += loss.item()
+            batches += 1
+
+        if epoch >= swa_start:
+            swa_model.update_parameters(mapper)
+
+        if epoch % 50 == 0:
+            temp = mapper.logit_scale.exp().item()
+            lr_now = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/batches:.4f} | "
+                  f"Temp: {1/temp:.4f} | LR: {lr_now:.2e}")
 
     torch.optim.swa_utils.update_bn(loader, swa_model)
     return swa_model.module
@@ -312,11 +422,11 @@ def main(epochs):
         np.save(p_embs_path, Y_train_products)
         print(f"\nSaved extracted embeddings: {len(X_train_bundles)} samples")
 
-    print("\nTraining Super Domain Mapper (OHNM + MixUp + Learnable Temp)...")
-    mapper_model = train_super_mapper(X_train_bundles, Y_train_products, epochs=epochs)
+    print("\nTraining XBM Domain Mapper (XBM + Label Smoothing + MixUp + SWA)...")
+    mapper_model = train_xbm_mapper(X_train_bundles, Y_train_products, epochs=epochs)
     
-    torch.save(mapper_model.state_dict(), "domain_mapper_super.pt")
-    print("Saved domain_mapper_super.pt!")
+    torch.save(mapper_model.state_dict(), "domain_mapper_xbm.pt")
+    print("Saved domain_mapper_xbm.pt!")
 
 if __name__ == "__main__":
     import sys

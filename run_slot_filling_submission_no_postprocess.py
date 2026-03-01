@@ -1,4 +1,5 @@
 import os
+import re
 import torch
 import numpy as np
 import pandas as pd
@@ -14,6 +15,38 @@ from semantic_filtering import SemanticFilter
 from train_mapper import ResidualDomainMapper
 
 warnings.filterwarnings("ignore")
+
+
+# ---------------------------------------------------------------------------
+# Temporal Proximity Weighting
+# ---------------------------------------------------------------------------
+
+def extract_ts(url):
+    """Extrae el timestamp en milisegundos de una URL de Inditex CDN."""
+    if not isinstance(url, str):
+        return 0
+    match = re.search(r'ts=(\d+)', url)
+    return int(match.group(1)) if match else 0
+
+
+def build_timestamp_arrays(catalog_ids, df_products):
+    """Crea un array de timestamps alineado con valid_catalog_ids."""
+    df_products = df_products.copy()
+    df_products['ts'] = df_products['product_image_url'].apply(extract_ts)
+    ts_map = df_products.set_index('product_asset_id')['ts'].to_dict()
+    return np.array([ts_map.get(pid, 0) for pid in catalog_ids], dtype=np.float64)
+
+
+def apply_temporal_weighting(sims, bundle_ts, catalog_ts, sigma=2.592e9):
+    """Multiplica las similitudes por un decaimiento gaussiano basado en la
+    diferencia temporal entre el bundle y cada producto del catálogo.
+    sigma ~= 1 mes en milisegundos (2 592 000 000 ms).
+    """
+    diffs = np.abs(catalog_ts - bundle_ts)
+    base_weight = 0.5
+    temporal_bonus = np.exp(-(diffs ** 2) / (2 * sigma ** 2))
+    weights = base_weight + (1.0 - base_weight) * temporal_bonus
+    return sims * weights
 
 
 def load_gr_lite(device):
@@ -108,6 +141,18 @@ def main():
     catalog_norms = np.linalg.norm(catalog_embeddings, axis=1, keepdims=True)
     catalog_norms[catalog_norms == 0] = 1e-10
     normalized_catalog = catalog_embeddings / catalog_norms
+
+    # Build temporal arrays ------------------------------------------------
+    print("Building temporal timestamp arrays...")
+    catalog_timestamps = build_timestamp_arrays(valid_catalog_ids, df_products)
+
+    df_bundles = pd.read_csv('data_csvs/bundles_dataset.csv')
+    df_bundles['ts'] = df_bundles['bundle_image_url'].apply(extract_ts)
+    bundle_ts_map = df_bundles.set_index('bundle_asset_id')['ts'].to_dict()
+    n_bundles_with_ts = (df_bundles['ts'] > 0).sum()
+    n_catalog_with_ts = (catalog_timestamps > 0).sum()
+    print(f"  Bundles con ts: {n_bundles_with_ts}/{len(df_bundles)}  |  "
+          f"Productos con ts: {n_catalog_with_ts}/{len(catalog_timestamps)}")
 
     print("\nLoading Semantic Metadata...")
     sf = SemanticFilter()
@@ -221,6 +266,11 @@ def main():
                 normalized_emb = emb / norm
             
             sims = np.dot(normalized_catalog, normalized_emb).flatten()
+            
+            # Temporal Proximity Weighting
+            current_bundle_ts = bundle_ts_map.get(bid, 0)
+            if current_bundle_ts > 0:
+                sims = apply_temporal_weighting(sims, current_bundle_ts, catalog_timestamps, sigma=2.592e9)
             
             source_zone = prediction_zones[i]
             sims = sf.apply_similarity_filters(sims, valid_catalog_ids, source_zone, bundle_section)

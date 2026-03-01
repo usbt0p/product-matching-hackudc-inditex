@@ -15,70 +15,82 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+from torch.optim.swa_utils import AveragedModel, SWALR
+
 class ResidualDomainMapper(nn.Module):
-    """Mapeador de dominio con conexión residual y expansión de canal."""
-    def __init__(self, dim=1024, hidden_dim=2048):
+    """Mapeador residual con inyección de ruido gaussiano en entrenamiento."""
+    def __init__(self, dim=1024, hidden_dim=2048, noise_std=0.015):
         super().__init__()
+        self.noise_std = noise_std
         self.proj = nn.Sequential(
             nn.Linear(dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.15),
             nn.Linear(hidden_dim, dim)
         )
 
     def forward(self, x):
+        if self.training:
+            x = x + torch.randn_like(x) * self.noise_std
+            
         delta = self.proj(x)
-        out = x + delta  # Conexión residual clave
+        out = x + delta
         return F.normalize(out, p=2, dim=-1)
 
-def info_nce_loss(preds, targets, temperature=0.05):
-    """
-    Pérdida contrastiva. Atrae pares correctos de la diagonal
-    y repele todos los demás cruces de la matriz del batch.
-    """
-    sim_matrix = torch.matmul(preds, targets.T) / temperature
-    labels = torch.arange(preds.size(0)).to(preds.device)
-    return F.cross_entropy(sim_matrix, labels)
+def margin_info_nce_loss(preds, targets, temperature=0.05, margin=0.15):
+    """Contrastive loss con margen duro para empujar pares positivos."""
+    sim_matrix = torch.matmul(preds, targets.T)
+    
+    # Restar margen solo a la diagonal (pares correctos)
+    idx = torch.arange(preds.size(0), device=preds.device)
+    sim_matrix[idx, idx] -= margin
+    
+    sim_matrix = sim_matrix / temperature
+    return F.cross_entropy(sim_matrix, idx)
 
-def train_mapper(bundle_embs, product_embs, epochs=15, batch_size=256, emb_dim=1024):
-    """Entrena el mapeador alineando vectores con Cosine Embedding Loss."""
+def train_mapper_advanced(X_bundles, Y_products, epochs=500, lr=5e-4):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = ResidualDomainMapper(dim=emb_dim).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
-    criterion = nn.CosineEmbeddingLoss()
-
-    dataset = TensorDataset(torch.tensor(bundle_embs).to(device), torch.tensor(product_embs).to(device))
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-    target = torch.ones(batch_size).to(device)
-
-    model.train()
-    best_model = None
-    best_loss = float('inf')
+    mapper = ResidualDomainMapper().to(device)
+    optimizer = optim.AdamW(mapper.parameters(), lr=lr, weight_decay=1e-3)
+    
+    # Configurar SWA para promediar pesos al final
+    swa_model = AveragedModel(mapper)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    swa_scheduler = SWALR(optimizer, swa_lr=1e-4)
+    swa_start = int(epochs * 0.75) # Empezar a promediar en el último 25%
+    
+    dataset = TensorDataset(torch.tensor(X_bundles).float(), torch.tensor(Y_products).float())
+    loader = DataLoader(dataset, batch_size=512, shuffle=True)
+    
     for epoch in range(epochs):
+        mapper.train()
         epoch_loss = 0.0
         batches = 0
         for b_emb, p_emb in loader:
+            b_emb, p_emb = b_emb.to(device), p_emb.to(device)
             optimizer.zero_grad()
             
-            mapped_b = model(b_emb)
+            mapped_b = mapper(b_emb)
+            loss = margin_info_nce_loss(mapped_b, p_emb)
             
-            loss = info_nce_loss(mapped_b, p_emb)
             loss.backward()
             optimizer.step()
             
             epoch_loss += loss.item()
             batches += 1
             
+        if epoch > swa_start:
+            swa_model.update_parameters(mapper)
+            swa_scheduler.step()
+        else:
+            scheduler.step()
+            
         print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/batches:.4f}")
-        
-        if epoch_loss/batches < best_loss:
-            best_loss = epoch_loss/batches
-            best_model = model.state_dict()
-    
-    model.load_state_dict(best_model)
-    return model
+            
+    # Fix batch norm params para el modelo SWA (aunque usemos LayerNorm, es buena práctica)
+    torch.optim.swa_utils.update_bn(loader, swa_model)
+    return swa_model.module
 
 def load_gr_lite(device):
     load_dotenv()
@@ -237,7 +249,7 @@ def main(epochs):
         print(f"\nSaved extracted embeddings: {len(X_train_bundles)} samples")
 
     print("\nTraining Domain Mapper...")
-    mapper_model = train_mapper(X_train_bundles, Y_train_products, epochs=epochs, batch_size=256, emb_dim=1024)
+    mapper_model = train_mapper_advanced(X_train_bundles, Y_train_products, epochs=epochs)
     
     torch.save(mapper_model.proj.state_dict(), "domain_mapper.pt")
     print("Saved domain_mapper.pt!")
@@ -247,5 +259,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         epochs = int(sys.argv[1])
     else:
-        epochs = 15
+        epochs = 500
     main(epochs)

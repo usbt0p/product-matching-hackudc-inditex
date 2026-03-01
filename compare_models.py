@@ -11,12 +11,11 @@ import warnings
 warnings.filterwarnings("ignore")
 
 def create_triple_side_by_side(img1, img2, img3, text1="Grounding DINO", text2="YOLO-Clothing", text3="YOLOS-Fashionpedia"):
-    # Create a new image combining three horizontally
+    # (Existing function code kept exactly the same...)
     w1, h1 = img1.size
     w2, h2 = img2.size
     w3, h3 = img3.size
     
-    # Scale to match height
     def scale_height(w, h, target_h):
         if h != target_h:
             return int((w / h) * target_h)
@@ -35,12 +34,9 @@ def create_triple_side_by_side(img1, img2, img3, text1="Grounding DINO", text2="
     
     draw = ImageDraw.Draw(dst)
     
-    # Font
     try:
-        # Usamos la ruta completa de Linux que definiste arriba
         linux_font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        
-        font = ImageFont.truetype(linux_font_path, 45)       # Tamaño para las cajas de YOLO
+        font = ImageFont.truetype(linux_font_path, 45)
     except IOError as e:
         print(f"Advertencia: No se pudo cargar la fuente. Usando por defecto. Error: {e}")
         font = ImageFont.load_default()
@@ -55,6 +51,114 @@ def create_triple_side_by_side(img1, img2, img3, text1="Grounding DINO", text2="
     draw.text((w1 + w2 + 10, 10), text3, fill="white", font=font)
     
     return dst
+
+def compute_iou_router(boxA, boxB):
+    """Calcula la Intersección sobre Unión (IoU)."""
+    xA = max(float(boxA[0]), float(boxB[0]))
+    yA = max(float(boxA[1]), float(boxB[1]))
+    xB = min(float(boxA[2]), float(boxB[2]))
+    yB = min(float(boxA[3]), float(boxB[3]))
+    interArea = max(0.0, float(xB - xA)) * max(0.0, float(yB - yA))
+    boxAreaA = (float(boxA[2]) - float(boxA[0])) * (float(boxA[3]) - float(boxA[1]))
+    boxAreaB = (float(boxB[2]) - float(boxB[0])) * (float(boxB[3]) - float(boxB[1]))
+    return interArea / float(boxAreaA + boxAreaB - interArea) if (boxAreaA + boxAreaB - interArea) > 0 else 0.0
+
+def filter_redundant_boxes(boxes_list, iou_thresh=0.75):
+    """Aplica NMS para limpiar la sobredetección."""
+    keep = []
+    # Ordenar por confianza si existe, si no por área (cajas más pequeñas suelen ser más precisas en ropa)
+    if all('score' in b for b in boxes_list):
+        boxes_list = sorted(boxes_list, key=lambda x: x['score'], reverse=True)
+    else:
+        # Calculate area using coordinates (x_min, y_min, x_max, y_max)
+        boxes_list = sorted(boxes_list, key=lambda x: (float(x['box'][2])-float(x['box'][0]))*(float(x['box'][3])-float(x['box'][1])) )
+    
+    for item in boxes_list:
+        if not any(compute_iou_router(item['box'], k['box']) > iou_thresh for k in keep):
+            keep.append(item)
+    return keep
+
+def get_union_box(boxes):
+    if not boxes: return None
+    x1 = min(float(b[0]) for b in boxes)
+    y1 = min(float(b[1]) for b in boxes)
+    x2 = max(float(b[2]) for b in boxes)
+    y2 = max(float(b[3]) for b in boxes)
+    return [x1, y1, x2, y2]
+
+def slot_filling_router(dino_preds, fash_preds, cloth_preds, img_width, img_height):
+    """
+    Rellena los slots del MoE (UPPER, LOWER, SHOES, DEFAULT) 
+    usando el mejor modelo para cada caso y fallbacks.
+    """
+    slots = {'UPPER': [], 'LOWER': [], 'SHOES': [], 'DEFAULT': []}
+
+    # --- 1. SLOT: SHOES (Unir en una sola bounding box si hay más de uno) ---
+    shoes = [p for p in cloth_preds if 'shoe' in p['label'].lower()]
+    if not shoes:
+        shoes = [p for p in fash_preds if 'shoe' in p['label'].lower()]
+        
+    if shoes:
+        union_shoe = get_union_box([s['box'] for s in shoes])
+        slots['SHOES'] = [{'box': union_shoe, 'route': 'SHOES', 'source': shoes[0].get('source', 'Unknown') + " (Merged)"}]
+
+    # --- 2. SLOT: ACCESORY / HEAD ---
+    # Consentimiento para HEAD (DINO + otro modelo)
+    dino_head = [p for p in dino_preds if p['label'].lower() in ['head', 'hat']]
+    cloth_head = [p for p in cloth_preds if p['label'].lower() in ['accessories', 'bags', 'bag', 'head', 'hat']]
+    fash_head = [p for p in fash_preds if p['label'].lower() in ['hat', 'glasses', 'sunglasses']]
+    
+    # Consenso espacial para head/accessories
+    accs_to_keep = []
+    
+    # Si DINO detecta cabeza, requerimos que otro yolo también detecte algo similar ahí
+    if dino_head:
+        all_others = cloth_head + fash_head
+        for dh in dino_head:
+            has_consensus = any(compute_iou_router(dh['box'], o['box']) > 0.3 for o in all_others)
+            if has_consensus:
+                accs_to_keep.append({'box': dh['box'], 'route': 'DEFAULT', 'source': 'Consensus Head'})
+
+    # Accesorios generales (bolsos, gafas) - Si YOLOS o YOLOv8 lo detectan con alto IOU, lo mantenemos (o si conf es altisima)
+    other_accs = [p for p in fash_preds if p['label'].lower() in ['bag', 'wallet', 'tie', 'scarf', 'belt']]
+    other_accs += [p for p in cloth_preds if p['label'].lower() in ['accessories', 'bags', 'bag']]
+    
+    # Conservamos los más confidentes o los que tienen consenso
+    slots['DEFAULT'].extend(accs_to_keep)
+    for a in filter_redundant_boxes(other_accs, 0.5):
+        slots['DEFAULT'].append({'box': a['box'], 'route': 'DEFAULT', 'source': a.get('source', 'Unknown')})
+
+    # --- 3 & 4. SLOTS: UPPER & LOWER (Prioridad DINO -> YOLO-Clothing posicional) ---
+    
+    # Extraemos upper/lower de DINO
+    dino_uppers = [p for p in dino_preds if 'upper' in p['label'].lower() or 'top' in p['label'].lower()]
+    dino_lowers = [p for p in dino_preds if 'lower' in p['label'].lower() or 'bottom' in p['label'].lower()]
+    
+    # Ropa general de YOLO-Clothing
+    cloth_general = [p for p in cloth_preds if 'clothing' in p['label'].lower()]
+
+    # Unimos y aplicamos NMS a todos juntos
+    combined_ul = dino_uppers + dino_lowers + cloth_general
+    filtered_ul = filter_redundant_boxes(combined_ul, 0.75)
+
+    # En lugar de asegurar 1 único UPPER y 1 único LOWER, volcamos todos los que han sobrevivido al NMS global.
+    for p in filtered_ul:
+        if p.get('source') == 'Grounding DINO':
+            if 'upper' in p['label'].lower() or 'top' in p['label'].lower():
+                slots['UPPER'].append({'box': p['box'], 'route': 'UPPER', 'source': p.get('source', 'Unknown')})
+            else:
+                slots['LOWER'].append({'box': p['box'], 'route': 'LOWER', 'source': p.get('source', 'Unknown')})
+        else:
+            # Es de YOLO-Clothing (general 'clothing'). Lo asignamos a UPPER o LOWER según su centro vertical.
+            y_center = (float(p['box'][1]) + float(p['box'][3])) / 2.0
+            if y_center < float(float(img_height) * 0.5):
+                slots['UPPER'].append({'box': p['box'], 'route': 'UPPER (Clothing)', 'source': p.get('source', 'Unknown')})
+            else:
+                slots['LOWER'].append({'box': p['box'], 'route': 'LOWER (Clothing)', 'source': p.get('source', 'Unknown')})
+
+    final_rois = slots['UPPER'] + slots['LOWER'] + slots['SHOES'] + slots['DEFAULT']
+    
+    return final_rois
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -74,7 +178,7 @@ def main():
     test_bundles = set(df_test['bundle_asset_id'].unique())
     train_bundles = df_bundles[~df_bundles['bundle_asset_id'].isin(test_bundles)]['bundle_asset_id'].tolist()
     
-    random.seed(42)
+    # random.seed(42)
     sample_bundles = random.sample(train_bundles, 25)
     print(f"Sampled 25 train bundles: {sample_bundles}")
     
@@ -295,6 +399,14 @@ def main():
                     label_id = pred["label_id"]
                     cls_name = yolos_model.config.id2label[label_id]
                     
+                    # Convert box to same format as others
+                    yolo_formatted_pred = {
+                        "box": box,
+                        "score": score,
+                        "label": cls_name,
+                        "source": "YOLOS-Fashionpedia"
+                    }
+                    
                     xmin, ymin, xmax, ymax = box
                     draw.rectangle([xmin, ymin, xmax, ymax], outline="green", width=4)
                     
@@ -302,12 +414,110 @@ def main():
                     text_bbox = draw.textbbox((xmin, ymin), text, font=box_font)
                     draw.rectangle([text_bbox[0], text_bbox[1], text_bbox[2]+4, text_bbox[3]+4], fill="green")
                     draw.text((xmin+2, ymin+2), text, fill="white", font=box_font)
+                    
+                    pred["source"] = "YOLOS-Fashionpedia"
+                    pred["label"] = cls_name
+                    
             except Exception as e:
                 print(f"YOLOS failed for {bid}: {e}")
         
+        # Format predictions for router
+        # Convert dino_preds
+        dino_for_router = []
+        for p in filtered_dino:
+            dino_for_router.append({
+                "box": p["box"],
+                "label": p["label"],
+                "score": p["score"],
+                "source": "Grounding DINO"
+            })
+            
+        # Convert clothing preds
+        cloth_for_router = []
+        if yolov8_model and 'v8_res' in locals():
+            for box_data in v8_res[0].boxes:
+                box = box_data.xyxy[0].cpu().numpy().tolist()
+                conf = float(box_data.conf[0].cpu().numpy())
+                cls_id = int(box_data.cls[0].cpu().numpy())
+                cls_name = yolov8_model.names[cls_id]
+                cloth_for_router.append({
+                    "box": box,
+                    "label": cls_name,
+                    "score": conf,
+                    "source": "YOLOv8-Clothing"
+                })
+        
+        # yolos_preds is already roughly formatted, but we use filtered_yolos
+        fash_for_router = []
+        for p in filtered_yolos:
+            fash_for_router.append({
+                "box": p["box"],
+                "label": p["label"],
+                "score": p["score"],
+                "source": "YOLOS-Fashionpedia"
+            })
+            
+        # Route
+        final_rois = slot_filling_router(dino_for_router, fash_for_router, cloth_for_router, img_orig.width, img_orig.height)
+        
         # Combine
         combined = create_triple_side_by_side(dino_img, v8_img, yolos_img)
-        combined.save(os.path.join(out_dir, f"{bid}_compare.jpg"))
+        
+        # CREATE ROUTED IMAGE
+        routed_img = img_orig.copy()
+        draw = ImageDraw.Draw(routed_img)
+        
+        COLORS = {
+            'UPPER': 'blue',
+            'LOWER': 'green',
+            'SHOES': 'red',
+            'DEFAULT': 'purple'
+        }
+        
+        for roi in final_rois:
+            box = roi['box']
+            route = roi['route']
+            source = roi.get('source', '')
+            
+            xmin, ymin, xmax, ymax = box
+            color = COLORS.get(route, "orange")
+            
+            draw.rectangle([xmin, ymin, xmax, ymax], outline=color, width=6)
+            
+            text_str = f"[{route}] {source}"
+            text_bbox = draw.textbbox((xmin, ymin), text_str, font=box_font)
+            draw.rectangle([text_bbox[0], text_bbox[1], text_bbox[2]+4, text_bbox[3]+4], fill=color)
+            draw.text((xmin+2, ymin+2), text_str, fill="white", font=box_font)
+            
+        # Make a quadro side-by-side by appending the routed image to the combined image
+        w_comb, h_comb = combined.size
+        w_rout, h_rout = routed_img.size
+        
+        def scale_height(w, h, target_h):
+            if h != target_h:
+                return int((w / h) * target_h)
+            return w
+            
+        w_rout_scaled = scale_height(w_rout, h_rout, h_comb)
+        routed_img = routed_img.resize((w_rout_scaled, h_comb))
+        
+        final_combined = Image.new('RGB', (w_comb + w_rout_scaled, h_comb))
+        final_combined.paste(combined, (0, 0))
+        final_combined.paste(routed_img, (w_comb, 0))
+        
+        draw_combined = ImageDraw.Draw(final_combined)
+        draw_combined.rectangle([w_comb, 0, w_comb + 350, 45], fill="black")
+        
+        try:
+            # Recreate font
+            linux_font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            font_title = ImageFont.truetype(linux_font_path, 45)
+        except IOError:
+            font_title = ImageFont.load_default()
+            
+        draw_combined.text((w_comb + 10, 10), "MoE Slot Router", fill="white", font=font_title)
+        
+        final_combined.save(os.path.join(out_dir, f"{bid}_compare.jpg"))
         print(f"Saved {bid}_compare.jpg")
 
     print(f"\nFinished! Visualizations saved to '{out_dir}/'")

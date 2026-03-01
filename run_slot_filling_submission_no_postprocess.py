@@ -49,6 +49,27 @@ def apply_temporal_weighting(sims, bundle_ts, catalog_ts, sigma=2.592e9):
     return sims * weights
 
 
+def alpha_query_expansion(roi_emb, catalog_embs, catalog_ids, sims, alpha=3.0, top_k_aqe=3, top_k_final=60):
+    """Refina el embedding de consulta promediándolo con sus K vecinos más
+    cercanos del catálogo (AQE / α-QE), luego hace la búsqueda final.
+
+    Recibe 'sims' pre-calculadas (con temporal+semantic ya aplicados) para
+    elegir los mejores vecinos sobre el espacio ya filtrado.
+    """
+    # Top-K vecinos del catálogo para construir la query expandida
+    top_aqe_idx = np.argsort(sims)[::-1][:top_k_aqe]
+    best_catalog_embs = catalog_embs[top_aqe_idx]  # (top_k_aqe, dim)
+
+    # Query expandida: el original pesa alpha veces más que la suma de vecinos
+    expanded_query = (roi_emb * alpha) + np.sum(best_catalog_embs, axis=0)
+    expanded_query = expanded_query / (np.linalg.norm(expanded_query) + 1e-10)
+
+    # Búsqueda final con query refinada
+    sims_final = np.dot(catalog_embs, expanded_query).flatten()
+    top_indices = np.argsort(sims_final)[::-1][:top_k_final]
+    return [catalog_ids[idx] for idx in top_indices]
+
+
 def load_gr_lite(device):
     load_dotenv()
     token = os.getenv("HF_TOKEN")
@@ -90,7 +111,7 @@ def get_embeddings(model, processor, images, device):
     
     return embs.cpu().numpy()
 
-def main():
+def main(alpha_query=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     
@@ -281,9 +302,16 @@ def main():
             
             source_zone = prediction_zones[i]
             sims = sf.apply_similarity_filters(sims, valid_catalog_ids, source_zone, bundle_section)
-            
-            top_indices = np.argsort(sims)[::-1][:60] # Just top 60 to save memory
-            ranked_products = [valid_catalog_ids[idx] for idx in top_indices]
+
+            if alpha_query:
+                # Alpha Query Expansion (AQE): refina la query con sus vecinos del catálogo
+                ranked_products = alpha_query_expansion(
+                    normalized_emb, normalized_catalog, valid_catalog_ids, sims,
+                    alpha=3.0, top_k_aqe=3, top_k_final=60
+                   )
+            else:
+                top_indices = np.argsort(sims)[::-1][:60] # Just top 60 to save memory
+                ranked_products = [valid_catalog_ids[idx] for idx in top_indices]
             sorted_lists.append(ranked_products)
             
         # Slot-Filling (Round-Robin) Interleaving

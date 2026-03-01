@@ -55,7 +55,7 @@ def get_embeddings(model, processor, images, device):
     
     return embs.cpu().numpy()
 
-def main():
+def main(use_lora: bool = False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     
@@ -69,7 +69,20 @@ def main():
     model, processor = load_gr_lite(device)
     if not model:
         return
-    
+
+    # Optionally wrap with LoRA adapter
+    if use_lora:
+        from peft import PeftModel
+        lora_dir = "gr_lite_lora"
+        if not os.path.isdir(lora_dir):
+            print(f"LoRA directory '{lora_dir}' not found. Run train_lora.py first.")
+            return
+        print(f"Applying LoRA adapter from '{lora_dir}'...")
+        model = PeftModel.from_pretrained(model, lora_dir)
+        model = model.to(device)
+        model.eval()
+        print("LoRA adapter applied.")
+
     df_products = pd.read_csv('data_csvs/product_dataset.csv')
     df_test = pd.read_csv('data_csvs/bundles_product_match_test.csv')
     
@@ -77,8 +90,10 @@ def main():
     test_bundle_ids = df_test['bundle_asset_id'].unique().tolist()
     
     # 1. Cache Catalog Embeddings
-    catalog_emb_path = "catalog_grlite_embeddings.npy"
-    catalog_ids_path = "valid_grlite_ids.npy"
+    # Use lora-specific paths when use_lora=True so originals are never overwritten
+    suffix = "_lora" if use_lora else ""
+    catalog_emb_path = f"catalog_grlite{suffix}_embeddings.npy"
+    catalog_ids_path = f"valid_grlite{suffix}_ids.npy"
     
     if os.path.exists(catalog_emb_path) and os.path.exists(catalog_ids_path):
         print("\nLoading precomputed GR-Lite catalog embeddings...")

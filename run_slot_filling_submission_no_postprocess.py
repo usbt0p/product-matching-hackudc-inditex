@@ -111,7 +111,7 @@ def get_embeddings(model, processor, images, device):
     
     return embs.cpu().numpy()
 
-def main(alpha_query=False):
+def main(alpha_query=False, use_lora=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     
@@ -142,27 +142,44 @@ def main(alpha_query=False):
         print(f"Failed to load YOLOv8-Clothing: {e}")
         return
     
-    # Load GR-Lite
+    # Load GR-Lite (optionally with LoRA adapter)
     print("Loading GR-Lite model (DINOv3 backbone)...")
     gr_model, gr_processor = load_gr_lite(device)
     if not gr_model:
         return
-    
+
+    if use_lora:
+        from peft import PeftModel
+        lora_dir = "gr_lite_lora"
+        if not os.path.isdir(lora_dir):
+            print(f"LoRA directory '{lora_dir}' not found. Run train_lora.py first.")
+            return
+        print(f"Applying LoRA adapter from '{lora_dir}'...")
+        gr_model = PeftModel.from_pretrained(gr_model, lora_dir).to(device)
+        gr_model.eval()
+        print("LoRA adapter applied.")
+
     df_products = pd.read_csv('data_csvs/product_dataset.csv')
     df_test = pd.read_csv('data_csvs/bundles_product_match_test.csv')
     
     test_bundle_ids = df_test['bundle_asset_id'].unique().tolist()
     
     # 1. Load Precomputed Catalog
-    catalog_emb_path = "catalog_grlite_embeddings.npy"
-    catalog_ids_path = "valid_grlite_ids.npy"
+    # When use_lora=True use lora-specific embeddings (must be generated via run_gr_lite.py first)
+    suffix = "_lora" if use_lora else ""
+    catalog_emb_path = f"catalog_grlite{suffix}_embeddings.npy"
+    catalog_ids_path = f"valid_grlite{suffix}_ids.npy"
     
     if os.path.exists(catalog_emb_path) and os.path.exists(catalog_ids_path):
-        print("\nLoading precomputed GR-Lite catalog embeddings...")
+        print(f"\nLoading precomputed GR-Lite{'(LoRA)' if use_lora else ''} catalog embeddings...")
         catalog_embeddings = np.load(catalog_emb_path)
         valid_catalog_ids = np.load(catalog_ids_path, allow_pickle=True).tolist()
     else:
-        print("\nGR-Lite catalog embeddings missing. Please run run_gr_lite.py first to cache them.")
+        if use_lora:
+            print("\nLoRA catalog embeddings not found. Run first:")
+            print("  python -c \"from run_gr_lite import main; main(use_lora=True)\"")
+        else:
+            print("\nGR-Lite catalog embeddings missing. Please run run_gr_lite.py first to cache them.")
         return
 
     # Normalize catalog embeddings

@@ -52,7 +52,7 @@ class SuperDomainMapper(nn.Module):
 ResidualDomainMapper = SuperDomainMapper
 
 
-def hard_negative_info_nce_loss(preds, targets, logit_scale, margin=0.15, hard_ratio=0.5):
+def hard_negative_info_nce_loss(preds, targets, logit_scale, margin=0.15, hard_ratio=0.15):
     """InfoNCE con Online Hard Negative Mining (OHNM) y temperatura aprendible.
 
     Solo el Top-`hard_ratio` de negativos (los más confusos del batch) contribuye
@@ -84,21 +84,32 @@ def hard_negative_info_nce_loss(preds, targets, logit_scale, margin=0.15, hard_r
 
 
 def train_super_mapper(X_bundles, Y_products, epochs=600, lr=3e-4):
-    """Entrena el SuperDomainMapper con MixUp, OHNM y SWA."""
+    """Entrena el SuperDomainMapper con MixUp (alpha=0.2), OHNM (top-15%) y OneCycleLR."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     mapper = SuperDomainMapper().to(device)
     optimizer = optim.AdamW(mapper.parameters(), lr=lr, weight_decay=1e-3)
-
-    swa_model = AveragedModel(mapper)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    swa_scheduler = SWALR(optimizer, swa_lr=5e-5)
-    swa_start = int(epochs * 0.7)  # SWA arranca en el último 30%
 
     dataset = TensorDataset(
         torch.tensor(X_bundles).float(),
         torch.tensor(Y_products).float()
     )
     loader = DataLoader(dataset, batch_size=512, shuffle=False)
+
+    # OneCycleLR: warmup automático en el primer 10% de pasos, luego cosine annealing
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=lr,
+        steps_per_epoch=len(loader),
+        epochs=epochs,
+        pct_start=0.1,        # 10% warmup
+        anneal_strategy='cos',
+        div_factor=25,        # LR inicial = max_lr / 25
+        final_div_factor=1e4  # LR final = max_lr / (25 * 1e4)
+    )
+
+    swa_model = AveragedModel(mapper)
+    swa_scheduler = SWALR(optimizer, swa_lr=5e-5)
+    swa_start = int(epochs * 0.7)  # SWA arranca en el último 30%
 
     for epoch in range(epochs):
         mapper.train()
@@ -109,24 +120,27 @@ def train_super_mapper(X_bundles, Y_products, epochs=600, lr=3e-4):
             b_emb, p_emb = b_emb.to(device), p_emb.to(device)
             optimizer.zero_grad()
 
-            # --- Manifold MixUp (30% de probabilidad) ---
+            # --- Manifold MixUp (30% de probabilidad, alpha=0.2) ---
             if np.random.rand() < 0.3:
-                alpha = 0.4
+                alpha = 0.2  # ajustado: mezcla más conservadora, evita barro semántico
                 lam = float(np.random.beta(alpha, alpha))
                 index = torch.randperm(b_emb.size(0), device=device)
                 b_emb = lam * b_emb + (1 - lam) * b_emb[index]
                 p_emb = lam * p_emb + (1 - lam) * p_emb[index]
                 b_emb = F.normalize(b_emb, p=2, dim=-1)
                 p_emb = F.normalize(p_emb, p=2, dim=-1)
-            # ---------------------------------------------
+            # --------------------------------------------------------
 
             mapped_b = mapper(b_emb)
             loss = hard_negative_info_nce_loss(mapped_b, p_emb, mapper.logit_scale)
 
             loss.backward()
-            # Clip para estabilizar gradientes del logit_scale
             torch.nn.utils.clip_grad_norm_(mapper.parameters(), 1.0)
             optimizer.step()
+
+            # OneCycleLR necesita step() en cada iteración, no por época
+            if epoch <= swa_start:
+                scheduler.step()
 
             epoch_loss += loss.item()
             batches += 1
@@ -134,11 +148,10 @@ def train_super_mapper(X_bundles, Y_products, epochs=600, lr=3e-4):
         if epoch > swa_start:
             swa_model.update_parameters(mapper)
             swa_scheduler.step()
-        else:
-            scheduler.step()
 
         temp = mapper.logit_scale.exp().item()
-        print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/batches:.4f} | Temp: {1/temp:.4f}")
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/batches:.4f} | Temp: {1/temp:.4f} | LR: {current_lr:.2e}")
 
     torch.optim.swa_utils.update_bn(loader, swa_model)
     return swa_model.module

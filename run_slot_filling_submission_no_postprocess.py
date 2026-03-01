@@ -43,7 +43,7 @@ def apply_temporal_weighting(sims, bundle_ts, catalog_ts, sigma=2.592e9):
     sigma ~= 1 mes en milisegundos (2 592 000 000 ms).
     """
     diffs = np.abs(catalog_ts - bundle_ts)
-    base_weight = 0.5
+    base_weight = 0.7
     temporal_bonus = np.exp(-(diffs ** 2) / (2 * sigma ** 2))
     weights = base_weight + (1.0 - base_weight) * temporal_bonus
     return sims * weights
@@ -94,15 +94,22 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     
-    # Load Domain Mapper (if available)
+    # Load Domain Mapper — prefer Super (full state_dict), fall back to legacy (proj-only)
     domain_mapper = None
-    mapper_path = "domain_mapper.pt"
-    if os.path.exists(mapper_path):
-        print("\nLoading Domain Mapper...")
+    super_path  = "domain_mapper_super.pt"
+    legacy_path = "domain_mapper.pt"
+    if os.path.exists(super_path):
+        print("\nLoading SuperDomainMapper...")
         domain_mapper = ResidualDomainMapper(dim=1024).to(device)
-        domain_mapper.proj.load_state_dict(torch.load(mapper_path, map_location=device, weights_only=True))
+        domain_mapper.load_state_dict(torch.load(super_path, map_location=device, weights_only=True))
         domain_mapper.eval()
-        print("Domain Mapper loaded successfully.")
+        print(f"SuperDomainMapper loaded (logit_scale temp ≈ {1/domain_mapper.logit_scale.exp().item():.4f})")
+    elif os.path.exists(legacy_path):
+        print("\nLoading legacy Domain Mapper (proj-only)...")
+        domain_mapper = ResidualDomainMapper(dim=1024).to(device)
+        domain_mapper.proj.load_state_dict(torch.load(legacy_path, map_location=device, weights_only=True))
+        domain_mapper.eval()
+        print("Legacy Domain Mapper loaded successfully.")
     
     # Load YOLOv8-Clothing
     print("\nLoading YOLOv8-Clothing model...")

@@ -17,78 +17,129 @@ warnings.filterwarnings("ignore")
 
 from torch.optim.swa_utils import AveragedModel, SWALR
 
-class ResidualDomainMapper(nn.Module):
-    """Mapeador residual con inyección de ruido gaussiano en entrenamiento."""
-    def __init__(self, dim=1024, hidden_dim=2048, noise_std=0.015):
+class SuperDomainMapper(nn.Module):
+    """Mapper residual con temperatura aprendible tipo CLIP.
+
+    Mejoras sobre ResidualDomainMapper:
+    - logit_scale aprendible (Learnable Temperature, estilo CLIP/SigLIP)
+    - Input Dropout para robustez adicional
+    - Compatible con SWA y grad-clipping
+    """
+    def __init__(self, dim=1024, hidden_dim=2048, noise_std=0.02):
         super().__init__()
         self.noise_std = noise_std
+        # Inicialización: log(1 / 0.07)  ≈  2.659  (temperatura inicial ~0.07)
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+
         self.proj = nn.Sequential(
+            nn.Dropout(0.1),          # Input dropout
             nn.Linear(dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
-            nn.Dropout(0.15),
+            nn.Dropout(0.2),
             nn.Linear(hidden_dim, dim)
         )
 
     def forward(self, x):
         if self.training:
             x = x + torch.randn_like(x) * self.noise_std
-            
         delta = self.proj(x)
         out = x + delta
         return F.normalize(out, p=2, dim=-1)
 
-def margin_info_nce_loss(preds, targets, temperature=0.05, margin=0.15):
-    """Contrastive loss con margen duro para empujar pares positivos."""
-    sim_matrix = torch.matmul(preds, targets.T)
-    
-    # Restar margen solo a la diagonal (pares correctos)
-    idx = torch.arange(preds.size(0), device=preds.device)
-    sim_matrix[idx, idx] -= margin
-    
-    sim_matrix = sim_matrix / temperature
-    return F.cross_entropy(sim_matrix, idx)
 
-def train_mapper_advanced(X_bundles, Y_products, epochs=500, lr=5e-4):
+# Alias para retrocompatibilidad con checkpoints ya guardados
+ResidualDomainMapper = SuperDomainMapper
+
+
+def hard_negative_info_nce_loss(preds, targets, logit_scale, margin=0.15, hard_ratio=0.5):
+    """InfoNCE con Online Hard Negative Mining (OHNM) y temperatura aprendible.
+
+    Solo el Top-`hard_ratio` de negativos (los más confusos del batch) contribuye
+    al gradiente, forzando a la red a aprender discriminación fina.
+    """
+    scale = torch.clamp(logit_scale.exp(), max=100.0)
+    sim_matrix = torch.matmul(preds, targets.T) * scale
+
+    idx = torch.arange(preds.size(0), device=preds.device)
+
+    # Margen sobre los positivos (diagonal)
+    sim_matrix[idx, idx] -= (margin * scale)
+
+    # Máscara para aislar negativos
+    mask = torch.ones_like(sim_matrix, dtype=torch.bool)
+    mask[idx, idx] = False
+    negatives = sim_matrix[mask].view(preds.size(0), -1)
+
+    # Top-K negativos más duros
+    k = max(1, int(negatives.size(1) * hard_ratio))
+    hard_negatives, _ = torch.topk(negatives, k, dim=1)
+
+    # Reconstruir logits: columna 0 = positivo, resto = hard negatives
+    positives = sim_matrix[idx, idx].unsqueeze(1)
+    hard_logits = torch.cat([positives, hard_negatives], dim=1)
+
+    labels = torch.zeros(preds.size(0), dtype=torch.long, device=preds.device)
+    return F.cross_entropy(hard_logits, labels)
+
+
+def train_super_mapper(X_bundles, Y_products, epochs=600, lr=3e-4):
+    """Entrena el SuperDomainMapper con MixUp, OHNM y SWA."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    mapper = ResidualDomainMapper().to(device)
+    mapper = SuperDomainMapper().to(device)
     optimizer = optim.AdamW(mapper.parameters(), lr=lr, weight_decay=1e-3)
-    
-    # Configurar SWA para promediar pesos al final
+
     swa_model = AveragedModel(mapper)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    swa_scheduler = SWALR(optimizer, swa_lr=1e-4)
-    swa_start = int(epochs * 0.75) # Empezar a promediar en el último 25%
-    
-    dataset = TensorDataset(torch.tensor(X_bundles).float(), torch.tensor(Y_products).float())
-    loader = DataLoader(dataset, batch_size=512, shuffle=True)
-    
+    swa_scheduler = SWALR(optimizer, swa_lr=5e-5)
+    swa_start = int(epochs * 0.7)  # SWA arranca en el último 30%
+
+    dataset = TensorDataset(
+        torch.tensor(X_bundles).float(),
+        torch.tensor(Y_products).float()
+    )
+    loader = DataLoader(dataset, batch_size=512, shuffle=False)
+
     for epoch in range(epochs):
         mapper.train()
         epoch_loss = 0.0
         batches = 0
+
         for b_emb, p_emb in loader:
             b_emb, p_emb = b_emb.to(device), p_emb.to(device)
             optimizer.zero_grad()
-            
+
+            # --- Manifold MixUp (30% de probabilidad) ---
+            if np.random.rand() < 0.3:
+                alpha = 0.4
+                lam = float(np.random.beta(alpha, alpha))
+                index = torch.randperm(b_emb.size(0), device=device)
+                b_emb = lam * b_emb + (1 - lam) * b_emb[index]
+                p_emb = lam * p_emb + (1 - lam) * p_emb[index]
+                b_emb = F.normalize(b_emb, p=2, dim=-1)
+                p_emb = F.normalize(p_emb, p=2, dim=-1)
+            # ---------------------------------------------
+
             mapped_b = mapper(b_emb)
-            loss = margin_info_nce_loss(mapped_b, p_emb)
-            
+            loss = hard_negative_info_nce_loss(mapped_b, p_emb, mapper.logit_scale)
+
             loss.backward()
+            # Clip para estabilizar gradientes del logit_scale
+            torch.nn.utils.clip_grad_norm_(mapper.parameters(), 1.0)
             optimizer.step()
-            
+
             epoch_loss += loss.item()
             batches += 1
-            
+
         if epoch > swa_start:
             swa_model.update_parameters(mapper)
             swa_scheduler.step()
         else:
             scheduler.step()
-            
-        print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/batches:.4f}")
-            
-    # Fix batch norm params para el modelo SWA (aunque usemos LayerNorm, es buena práctica)
+
+        temp = mapper.logit_scale.exp().item()
+        print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/batches:.4f} | Temp: {1/temp:.4f}")
+
     torch.optim.swa_utils.update_bn(loader, swa_model)
     return swa_model.module
 
@@ -248,16 +299,16 @@ def main(epochs):
         np.save(p_embs_path, Y_train_products)
         print(f"\nSaved extracted embeddings: {len(X_train_bundles)} samples")
 
-    print("\nTraining Domain Mapper...")
-    mapper_model = train_mapper_advanced(X_train_bundles, Y_train_products, epochs=epochs)
+    print("\nTraining Super Domain Mapper (OHNM + MixUp + Learnable Temp)...")
+    mapper_model = train_super_mapper(X_train_bundles, Y_train_products, epochs=epochs)
     
-    torch.save(mapper_model.proj.state_dict(), "domain_mapper.pt")
-    print("Saved domain_mapper.pt!")
+    torch.save(mapper_model.state_dict(), "domain_mapper_super.pt")
+    print("Saved domain_mapper_super.pt!")
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:
         epochs = int(sys.argv[1])
     else:
-        epochs = 500
+        epochs = 600
     main(epochs)

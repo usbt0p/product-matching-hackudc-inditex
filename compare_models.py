@@ -1,3 +1,12 @@
+'''Compare the performance of different segmenters on the same images, and plot them side by side.
+
+The segmenters are:
+- Grounding DINO
+- YOLO-Clothing
+- YOLOS-Fashionpedia
+- Slot Filling Router (an ensemble of the above that uses intermediate logic to combine the results on four sections: UPPER, LOWER, SHOES, DEFAULT)
+'''
+
 import os
 import random
 import torch
@@ -165,6 +174,7 @@ def main():
     print(f"Using device: {device}")
     
     print("Loading descriptions...")
+    # This file has body like segments we want to use to filter by semantic body part
     with open("unique_product_descriptions.txt", "r") as f:
         descriptions = [line.strip().replace('/', ' ').lower() for line in f if line.strip()]
     
@@ -207,21 +217,15 @@ def main():
     out_dir = "compare_output"
     os.makedirs(out_dir, exist_ok=True)
     
-    # # For bounding box texts
-    # try:
-    #     box_font = ImageFont.truetype("DejavuSans-Bold.ttf", 20)
-    # except IOError:
-    #     box_font = ImageFont.load_default()
-
     # Font
     try:
-        # Usamos la ruta completa de Linux que definiste arriba
         linux_font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         
         box_font = ImageFont.truetype(linux_font_path, 35)       # Tamaño para las cajas de YOLO
         title_font = ImageFont.truetype(linux_font_path, 55) # Tamaño para los títulos
     except IOError as e:
-        print(f"Advertencia: No se pudo cargar la fuente. Usando por defecto. Error: {e}")
+        print(f"Advertencia: No se pudo cargar la fuente. Usando por defecto. Error: {e}\n\
+            Esto puede causar que el texto sea minúsculo o no se vea.")
         box_font = ImageFont.load_default()
         title_font = ImageFont.load_default()
     
@@ -262,23 +266,12 @@ def main():
                 })
                 
             dino_preds.sort(key=lambda x: x["score"], reverse=True)
-            
-            def compute_iou(boxA, boxB):
-                xA = max(boxA[0], boxB[0])
-                yA = max(boxA[1], boxB[1])
-                xB = min(boxA[2], boxB[2])
-                yB = min(boxA[3], boxB[3])
-                interArea = max(0, xB - xA) * max(0, yB - yA)
-                boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-                boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-                iou = interArea / float(boxAArea + boxBArea - interArea) if (boxAArea + boxBArea - interArea) > 0 else 0
-                return iou
                 
             filtered_dino = []
             for pred in dino_preds:
                 keep = True
                 for kept in filtered_dino:
-                    if compute_iou(pred["box"], kept["box"]) > 0.6:
+                    if compute_iou_router(pred["box"], kept["box"]) > 0.6:
                         keep = False
                         break
                 if keep:
@@ -343,7 +336,7 @@ def main():
                 allowed_cats = [
                     'shirt', 'top', 't-shirt', 'sweatshirt', 'sweater', 'cardigan',
                     'jacket', 'vest', 'pants', 'shorts', 'skirt', 'coat', 'dress',
-                    'jumpsuit', 'glasses', 'hat', 'hair accessory', 'tie', 'glove',
+                    'glasses', 'hat', 'tie', 'glove',
                     'belt', 'sock', 'shoe', 'bag', 'scarf', 'collar',
                     'lapel', 'buckle'
                 ]
@@ -367,18 +360,6 @@ def main():
                 
                 yolos_preds.sort(key=lambda x: x["score"], reverse=True)
                 
-                # NMS function
-                def compute_iou(boxA, boxB):
-                    xA = max(boxA[0], boxB[0])
-                    yA = max(boxA[1], boxB[1])
-                    xB = min(boxA[2], boxB[2])
-                    yB = min(boxA[3], boxB[3])
-                    interArea = max(0, xB - xA) * max(0, yB - yA)
-                    boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-                    boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-                    iou = interArea / float(boxAArea + boxBArea - interArea) if (boxAArea + boxBArea - interArea) > 0 else 0
-                    return iou
-                
                 filtered_yolos = []
                 for pred in yolos_preds:
                     if pred["score"] < 0.5:
@@ -386,7 +367,7 @@ def main():
                         
                     keep = True
                     for kept in filtered_yolos:
-                        if compute_iou(pred["box"], kept["box"]) > 0.6:
+                        if compute_iou_router(pred["box"], kept["box"]) > 0.6:
                             keep = False
                             break
                     if keep:
@@ -509,10 +490,11 @@ def main():
         draw_combined.rectangle([w_comb, 0, w_comb + 350, 45], fill="black")
         
         try:
-            # Recreate font
             linux_font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
             font_title = ImageFont.truetype(linux_font_path, 45)
         except IOError:
+            warnings.warn("Advertencia: No se pudo cargar la fuente. Usando por defecto. Error: {e}\n\
+                Esto puede causar que el texto sea minúsculo o no se vea.")
             font_title = ImageFont.load_default()
             
         draw_combined.text((w_comb + 10, 10), "MoE Slot Router", fill="white", font=font_title)

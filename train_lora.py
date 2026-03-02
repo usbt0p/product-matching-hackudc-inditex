@@ -1,4 +1,19 @@
+'''Train LoRA on GR-Lite. Full fine-tuning is too resource-intensive and time consuming, not ideal for a 36h hackathon
+
+This was not used in the final submission, since i only had time for a few epochs and the results were not as good as i expected.
+Leaving it here for reference, and because LoRA is probably a good and scalable idea if taken further.
+
+The script implements a bulletproof training loop with:
+- Gradient checkpointing
+- Mixed precision training
+- Gradient accumulation
+- Shield 1: anti-fragmentation env var MUST be first, before torch import
+- Shield 2: gradient checkpointing
+- Shield 3: gradient accumulation + mixed precision AMP
+'''
+
 # Shield 1: anti-fragmentation env var MUST be first, before torch import
+# this was done to avoid OOM errors (since i was using a RTX 3090 on remote and couldnt afford a shutdown)
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 

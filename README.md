@@ -1,6 +1,15 @@
-# Inditex Fashion Retrieval — HackUDC 2026
+# Inditex Fashion Retrieval - HackUDC 2026 - Repositorio ganador
 
-> **Zara / Inditex challenge** — given a photo of a person wearing clothes, find the exact products from the Inditex catalogue.
+> **Zara / Inditex challenge**: Develop a solution that, starting from an image of a model, identifies the items they are wearing (e.g., dress, heels, necklace, or handbag) and, for each one, returns the corresponding product reference from a predefined catalog. See details on [docs/RETO.md](docs/RETO.md), or [on the HackUDC 2026 challenge website](https://live.hackudc.gpul.org/challenges/).
+
+---
+
+> [!TIP] 
+> Este es el repositorio ganador del Hackathon Inditex Fashion Retrieval en el HackUDC 2026. Participé como _soloVSsquad_ y obtive una puntuación final del 71.05% (calculada como el porcentaje de lineas correctas de la submission sobre sobre la ground truth).
+
+<img src="imgs/results.png" alt="Results of the Hackathon" width="550">
+
+---
 
 | | |
 |:---:|:---:|
@@ -9,7 +18,9 @@
 
 
 > [!WARNING]
-> **Este repo fue vibecodeado en un hackathon de madrudada con 3 horas de sueño en un lapso de 36 horas.** El código funciona, pero no está organizado para producción. Y no es bonito. De hecho, es feo. Hay scripts experimentales por todas partes, archivos temporales y decisiones tomadas a las 5 de la madrugada. Estás avisado. Lo refinaré cuando pueda, pero funciona para el objetivo que tiene.
+> **Este repo fue vibecodeado en un hackathon de madrudada con 3 horas de sueño en un lapso de 36 horas.** El código funciona, pero no está organizado para producción. Y no es bonito. De hecho, es feo. 
+>
+>El historial de git es cuestionable ya que tuve que reiniciarlo a partir de un zip de una version anterior,la estructura y abstracción de código es cuestionable y casi todo está estructurado en scripts (con pocas clases y bastante duplicación de código), y hay muchas cuestionables tomadas a las 5 de la madrugada. Estás avisado. Lo refinaré cuando pueda, pero funciona para el objetivo que tiene, siguiendo las instrucciones [del setup](#setup)
 
 ---
 
@@ -24,6 +35,8 @@ Bundle foto → Detección de prendas → Embeddings → Búsqueda en catálogo 
 ```
 
 Decidí tratar el problema como uno de búsqueda / recuperación de información, y no centrarme tanto en finetuning de modelos, etc. Básicamente, al hacer similaridad entre embeddings de query y catálogo, el problema se reduce a una búsqueda de vecinos cercanos, pero intentando refinar al máximo la respuesta.
+
+Es importante denotar que se evaluarán hasta un máximo de 15 productos asociados a cada bundle (las 15 primeras filas), por lo que no tiene sentido devolver más de 15 productos, y nos interesa repartir adecuadamente los 15 productos entre las diferentes prendas del bundle.
 
 ---
 

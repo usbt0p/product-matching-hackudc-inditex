@@ -70,7 +70,7 @@ Es importante denotar que se evaluarán hasta un máximo de 15 productos asociad
 |---|---|
 | `run_slot_filling_submission_no_postprocess.py` | **El script principal.** Genera el CSV de submission final |
 | `compare_models.py` | Slot Filling Router: combina DINO + YOLOS + YOLOv8 en slots semánticos |
-| `train_mapper.py` | SuperDomainMapper: cierra el domain gap bundle→catálogo |
+| `train_mapper.py` | SuperDomainMapper: cierra el domain gap bundle→catálogo. Este es probablemente el archivo más importante del proyecto en el sentido de que fué el que más impacto tuvo para la victoria. Mejorar poco a poco el DomainMapper consistentemente con mejores técnicas de negativos y regularización fué lo que me dio el 71% final |
 | `train_lora.py` | Fine-tuning LoRA del backbone GR-Lite |
 | `semantic_filtering.py` | Filtrado por zona corporal basado en metadatos semánticos |
 | `precompute_dino.py` | Precalcula cajas "macro" de Grounding DINO para los bundles de test |

@@ -1,3 +1,29 @@
+'''Main script for generating the final submission CSV file.
+
+This script is the final step in the pipeline. It takes the precomputed embeddings and uses several techniques along the way to
+achieve the results. Not all of them where used in the final submission though, like the LoRA of alpha query expansion.
+
+The pipeline is as follows:
+1. Load models: DomainMapper, YOLOv8-Clothing, GR-Lite (optionally with LoRA adapter). 
+    - DinoV2 is not loaded because it's detections are precomputed in the test_dino_macro.json file.
+2. Load product dataset.
+3. Load precomputed catalog embeddings, valid catalog IDs, and macro regions from DinoV2. Normalize embeddings.
+4. Extract tempopral data from product URLs and other metadata.
+5. For each test bundle:
+    1. Use YOLO to extract regions from the bundle images.
+    2. Filter out regions with area < 100 pixels.
+    3. Use semantic filtering to assign zones to the regions.
+    4. Use global (all bundle) fallback in case of missing zones.
+    5. Compute the final embeddings for each region using GR-Lite.
+    6. Use the domain mapper to transform the embeddings to the catalog space.
+    7. Compute the dot product between the transformed embeddings and the catalog embeddings.
+    8. Apply garbage filter and sharpening.
+    9. Apply temporal weighting from the bundle image timestamp.
+    10. Enforce semantic constraints using the zone information (zero the scores of products that don't match the zone).
+    11. Optionally apply alpha query expansion.
+6. Select the top-15 products using round-robin, to evenly distribute the selection across the different sources. 
+'''
+
 import os
 import re
 import torch
@@ -118,26 +144,14 @@ def main(alpha_query=False, use_lora=False):
     # Load Domain Mapper — priority: XBM > Super > Legacy
     domain_mapper = None
     xbm_path    = "domain_mapper_xbm.pt"
-    super_path  = "domain_mapper_super.pt"
-    legacy_path = "domain_mapper.pt"
     if os.path.exists(xbm_path):
         print("\nLoading XBM DomainMapper...")
         domain_mapper = ResidualDomainMapper(dim=1024).to(device)
         domain_mapper.load_state_dict(torch.load(xbm_path, map_location=device, weights_only=True))
         domain_mapper.eval()
         print(f"XBM DomainMapper loaded (temp ≈ {1/domain_mapper.logit_scale.exp().item():.4f})")
-    elif os.path.exists(super_path):
-        print("\nLoading SuperDomainMapper...")
-        domain_mapper = ResidualDomainMapper(dim=1024).to(device)
-        domain_mapper.load_state_dict(torch.load(super_path, map_location=device, weights_only=True))
-        domain_mapper.eval()
-        print(f"SuperDomainMapper loaded (temp ≈ {1/domain_mapper.logit_scale.exp().item():.4f})")
-    elif os.path.exists(legacy_path):
-        print("\nLoading legacy Domain Mapper (proj-only)...")
-        domain_mapper = ResidualDomainMapper(dim=1024).to(device)
-        domain_mapper.proj.load_state_dict(torch.load(legacy_path, map_location=device, weights_only=True))
-        domain_mapper.eval()
-        print("Legacy Domain Mapper loaded successfully.")
+    else:
+        raise Exception("No DomainMapper found. Please train one with train_mapper.py, it will save it as 'domain_mapper_xbm.pt'.")
     
     # Load YOLOv8-Clothing
     print("\nLoading YOLOv8-Clothing model...")
@@ -265,6 +279,7 @@ def main(alpha_query=False, use_lora=False):
         
         # Clean up any missing valid crops filtered out dynamically
         # Since valid_crops filters by w>10 and h>10, we must construct prediction_zones perfectly paired.
+        # A prediction zone associates with a valid crop if they overlap
         valid_zones = []
         for i, box in enumerate(boxes):
             x1, y1, x2, y2 = map(int, box)
@@ -341,10 +356,10 @@ def main(alpha_query=False, use_lora=False):
                 # Alpha Query Expansion (AQE): refina la query con sus vecinos del catálogo
                 ranked_products = alpha_query_expansion(
                     normalized_emb, normalized_catalog, valid_catalog_ids, sims,
-                    alpha=3.0, top_k_aqe=3, top_k_final=60
+                    alpha=3.0, top_k_aqe=3, top_k_final=200
                    )
             else:
-                top_indices = np.argsort(sims)[::-1][:60] # Just top 60 to save memory
+                top_indices = np.argsort(sims)[::-1][:200] # Just top 200 to save memory
                 ranked_products = [valid_catalog_ids[idx] for idx in top_indices]
             sorted_lists.append(ranked_products)
             

@@ -21,6 +21,7 @@ __pycache__
 !imgs/2.png
 !imgs/3.png
 !imgs/4.png
+!imgs/results.png
 
 *.json
 *.log

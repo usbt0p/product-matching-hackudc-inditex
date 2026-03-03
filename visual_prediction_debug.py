@@ -17,6 +17,7 @@ from transformers import (
 )
 from dotenv import load_dotenv
 from tqdm import tqdm
+from ultralytics import YOLO as NativeYOLO
 
 from semantic_filtering import SemanticFilter
 from run_gr_lite import get_embeddings, load_gr_lite
@@ -63,16 +64,15 @@ NMS_IOU_THRESHOLD = 0.6
 GLOBAL_MODE = 2
 # --------------------------------
 
-def main():
+def main(out_dir="visual_debug_yolos_no_nms", detection_model="clothing", random_selection=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     
-    out_dir = "visual_debug_yolos_no_nms"
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=False)
     
     df_train = pd.read_csv('data_csvs/bundles_product_match_train.csv')
     train_bids = df_train['bundle_asset_id'].unique().tolist()
-    random.seed(42)
+    if not random_selection: random.seed(42)
     sample_bids = random.sample(train_bids, 20)
     
     # 1. Load DINO for macro regions to avoid OOM by doing it first
@@ -106,10 +106,20 @@ def main():
     torch.cuda.empty_cache()
     print("DINO macro extraction complete. Model offloaded.")
 
-    print("\nLoading YOLOS-Fashionpedia model...")
-    yolos_processor = AutoImageProcessor.from_pretrained("valentinafeve/yolos-fashionpedia")
-    yolos_model = AutoModelForObjectDetection.from_pretrained("valentinafeve/yolos-fashionpedia").to(device)
-
+    print("\nLoading YOLO model...")
+    yolos_processor = None
+    yolos_model = None
+    yolov8_model = None
+    if detection_model == "fashionpedia":
+        yolos_processor = AutoImageProcessor.from_pretrained("valentinafeve/yolos-fashionpedia")
+        yolos_model = AutoModelForObjectDetection.from_pretrained("valentinafeve/yolos-fashionpedia").to(device)
+    elif detection_model == "clothing":
+        from huggingface_hub import hf_hub_download
+        v8_model_path = hf_hub_download(repo_id="kesimeg/yolov8n-clothing-detection", filename="best.pt")
+        yolov8_model = NativeYOLO(v8_model_path)
+    elif detection_model == "slot_filling_router":
+        raise NotImplementedError("Slot Filling Router not implemented yet")
+    
     print("Loading GR-Lite model (DINOv3 backbone)...")
     gr_model, gr_processor = load_gr_lite(device)
 
@@ -139,35 +149,55 @@ def main():
         bundle_section = sf.get_bundle_section(bid)
         macro_boxes = macro_cache.get(bid, [])
         
-        # Get raw YOLOS boxes (No NMS)
-        inputs = yolos_processor(images=img, return_tensors="pt").to(device)
-        with torch.no_grad():
-            outputs = yolos_model(**inputs)
-            
-        target_sizes = torch.tensor([img.size[::-1]])
-        yolos_results = yolos_processor.post_process_object_detection(outputs, threshold=0.01, target_sizes=target_sizes)[0]
-        
-        allowed_cats = [
-            'shirt', 'top', 't-shirt', 'sweatshirt', 'sweater', 'cardigan',
-            'jacket', 'vest', 'pants', 'shorts', 'skirt', 'coat', 'dress',
-            'jumpsuit', 'glasses', 'hat', 'hair accessory', 'tie', 'glove',
-            'belt', 'sock', 'shoe', 'bag', 'scarf', 'collar',
-            'lapel', 'buckle'
-        ]
-        
+        # --- Detection ---
         raw_preds = []
-        for score, label_t, box in zip(yolos_results["scores"], yolos_results["labels"], yolos_results["boxes"]):
-            s = float(score)
-            if s < CONFIDENCE_THRESHOLD: continue
-            
-            label_id = label_t.item() if hasattr(label_t, 'item') else int(label_t)
-            cls_name = yolos_model.config.id2label[label_id]
-            if not any(cat in cls_name.lower() for cat in allowed_cats):
-                continue
-            
-            b = box.cpu().numpy() if hasattr(box, 'cpu') else np.array(box)
-            raw_preds.append({"box": b, "score": s, "cls": cls_name})
-            
+
+        if detection_model == "clothing" and yolov8_model:
+            try:
+                v8_res = yolov8_model.predict(img_path, conf=CONFIDENCE_THRESHOLD, verbose=False)
+                for box_t, score_t, cls_t in zip(
+                    v8_res[0].boxes.xyxy,
+                    v8_res[0].boxes.conf,
+                    v8_res[0].boxes.cls,
+                ):
+                    raw_preds.append({
+                        "box": box_t.cpu().numpy(),
+                        "score": float(score_t),
+                        "cls": yolov8_model.names[int(cls_t)],
+                    })
+            except Exception as e:
+                print(f"YOLOv8 failed for {bid}: {e}")
+
+        elif detection_model == "fashionpedia" and yolos_model and yolos_processor:
+            allowed_cats = [
+                'shirt', 'top', 't-shirt', 'sweatshirt', 'sweater', 'cardigan',
+                'jacket', 'vest', 'pants', 'shorts', 'skirt', 'coat', 'dress',
+                'jumpsuit', 'glasses', 'hat', 'hair accessory', 'tie', 'glove',
+                'belt', 'sock', 'shoe', 'bag', 'scarf', 'collar', 'lapel', 'buckle'
+            ]
+            try:
+                inputs = yolos_processor(images=img, return_tensors="pt").to(device)
+                with torch.no_grad():
+                    outputs = yolos_model(**inputs)
+                target_sizes = torch.tensor([img.size[::-1]])
+                yolos_results = yolos_processor.post_process_object_detection(
+                    outputs, threshold=0.01, target_sizes=target_sizes
+                )[0]
+                for score, label_t, box in zip(
+                    yolos_results["scores"], yolos_results["labels"], yolos_results["boxes"]
+                ):
+                    s = float(score)
+                    if s < CONFIDENCE_THRESHOLD:
+                        continue
+                    label_id = label_t.item() if hasattr(label_t, 'item') else int(label_t)
+                    cls_name = yolos_model.config.id2label[label_id]
+                    if not any(cat in cls_name.lower() for cat in allowed_cats):
+                        continue
+                    b = box.cpu().numpy() if hasattr(box, 'cpu') else np.array(box)
+                    raw_preds.append({"box": b, "score": s, "cls": cls_name})
+            except Exception as e:
+                print(f"YOLOS failed for {bid}: {e}")
+
         raw_preds.sort(key=lambda x: x["score"], reverse=True)
         
         filtered_preds = []
@@ -320,4 +350,11 @@ def main():
         final_img.save(os.path.join(out_dir, f"{bid}_debug.jpg"))
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python visual_prediction_debug.py <out_dir> <detection_model>")
+        sys.exit(1)
+    out_dir = sys.argv[1]
+    detection_model = sys.argv[2] if len(sys.argv) > 2 else "clothing"
+    random_selection = sys.argv[3] if len(sys.argv) > 3 else False
+    main(out_dir, detection_model, random_selection)

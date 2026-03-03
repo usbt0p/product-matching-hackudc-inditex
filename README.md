@@ -1,11 +1,16 @@
 # Inditex Fashion Retrieval - HackUDC 2026 - Repositorio ganador
 
-> **Zara / Inditex challenge**: Develop a solution that, starting from an image of a model, identifies the items they are wearing (e.g., dress, heels, necklace, or handbag) and, for each one, returns the corresponding product reference from a predefined catalog. See details on [docs/RETO.md](docs/RETO.md), or [on the HackUDC 2026 challenge website](https://live.hackudc.gpul.org/challenges/).
+
+> **Reto de Zara / Inditex**: Desarrollar una solución que, a partir de una foto de un modelo, identifique los artículos que lleva puestos (como un vestido, tacones, collar, o bolsa) y, para cada uno de ellos, devuelva la referencia del producto correspondiente de un catálogo predefinido. 
+> 
+> Ver detalles en [docs/RETO.md](docs/RETO.md), o [en el sitio web del HackUDC 2026](https://live.hackudc.gpul.org/challenges/).
+
+> [!TIP] 🌐 [English version available in docs/README_EN.md](docs/README_EN.md)
 
 ---
 
 > [!NOTE]
-> Este es el repositorio ganador del Hackathon Inditex Fashion Retrieval en el HackUDC 2026. Participé como _soloVSsquad_ y obtuve una puntuación final del **71.05%** (calculada como el porcentaje de líneas correctas de la submission sobre la ground truth).
+> Este fue el repositorio ganador del Hackathon Inditex Fashion Retrieval en el HackUDC 2026. Participé como _soloVSsquad_ y obtuve una puntuación final del **71.05%** (calculada como el porcentaje de líneas correctas de la submission sobre la ground truth).
 
 ---
 
@@ -221,9 +226,10 @@ Las mejoras se acumularon de forma iterativa. Esta es mi estimación del impacto
 ## Licencia
 
 Apache 2.0 ,  ver [LICENSE.md](LICENSE.md). Open source, úsalo como quieras.
+Se aceptan contribuciones, issues, forks y pull requests!
 
 ---
 
     ~ usbt0p a.k.a soloVSsquad da sus agradecimientos a: ☕, GoofyTex, GPUL, Goole Antigravity, y a todos los que hicieron posible este hackathon épico
 
-<img src="imgs/results.png" alt="Results of the Hackathon" width="600">
+<img src="imgs/results.png" alt="Results of the Hackathon" width="700">

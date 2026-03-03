@@ -4,10 +4,8 @@
 
 ---
 
-> [!TIP] 
+> [!NOTE] 
 > Este es el repositorio ganador del Hackathon Inditex Fashion Retrieval en el HackUDC 2026. Participé como _soloVSsquad_ y obtive una puntuación final del 71.05% (calculada como el porcentaje de lineas correctas de la submission sobre sobre la ground truth).
-
-<img src="imgs/results.png" alt="Results of the Hackathon" width="550">
 
 ---
 
@@ -18,9 +16,11 @@
 
 
 > [!WARNING]
-> **Este repo fue vibecodeado en un hackathon de madrudada con 3 horas de sueño en un lapso de 36 horas.** El código funciona, pero no está organizado para producción. Y no es bonito. De hecho, es feo. 
+> **Este repo fue vibecodeado en un hackathon, con 3 horas de sueño, en un lapso de 36 horas.** El código funciona, pero no está organizado para producción. Y no es bonito. De hecho, es feo. 
 >
->El historial de git es cuestionable ya que tuve que reiniciarlo a partir de un zip de una version anterior,la estructura y abstracción de código es cuestionable y casi todo está estructurado en scripts (con pocas clases y bastante duplicación de código), y hay muchas cuestionables tomadas a las 5 de la madrugada. Estás avisado. Lo refinaré cuando pueda, pero funciona para el objetivo que tiene, siguiendo las instrucciones [del setup](#setup)
+> El historial de git es cuestionable ya que tuve que reiniciarlo a partir de un zip de una version anterior (problemas con historial al comittear sin querer archivos grandes de embeddings precomputados). 
+> La estructura y abstracción de código es cuestionable y casi todo está estructurado en scripts en lugar de clases y bastante duplicación de código. Hay muchas decisiones cuestionables tomadas a las 5 de la madrugada. Estás avisado. Lo refinaré cuando pueda, pero funciona para el objetivo que tiene, siguiendo las instrucciones [del setup](#setup).
+> También tengo planeado explicar más en profundidad el proceso de mejora iterativa que seguí, refactorizar el código y documentar todo algo mejor.
 
 ---
 
@@ -70,7 +70,7 @@ Es importante denotar que se evaluarán hasta un máximo de 15 productos asociad
 |---|---|
 | `run_slot_filling_submission_no_postprocess.py` | **El script principal.** Genera el CSV de submission final |
 | `compare_models.py` | Slot Filling Router: combina DINO + YOLOS + YOLOv8 en slots semánticos |
-| `train_mapper.py` | SuperDomainMapper: cierra el domain gap bundle→catálogo. Este es probablemente el archivo más importante del proyecto en el sentido de que fué el que más impacto tuvo para la victoria. Mejorar poco a poco el DomainMapper consistentemente con mejores técnicas de negativos y regularización fué lo que me dio el 71% final |
+| `train_mapper.py` | SuperDomainMapper: cierra el domain gap bundle→catálogo. Este es probablemente el archivo más importante del proyecto en el sentido de que fue el que más impacto tuvo para la victoria. Mejorar poco a poco el DomainMapper consistentemente con mejores técnicas de negativos y regularización fue lo que me dio el 71% final |
 | `train_lora.py` | Fine-tuning LoRA del backbone GR-Lite |
 | `semantic_filtering.py` | Filtrado por zona corporal basado en metadatos semánticos |
 | `precompute_dino.py` | Precalcula cajas "macro" de Grounding DINO para los bundles de test |
@@ -119,4 +119,6 @@ Apache 2.0 — ver [LICENSE.md](LICENSE.md). Open source, úsalo como quieras.
 
 ---
 
-~ usbt0p :coffee:
+    ~ usbt0p a.k.a soloVSsquad would like to thank: ☕
+
+<img src="imgs/results.png" alt="Results of the Hackathon" width="600">

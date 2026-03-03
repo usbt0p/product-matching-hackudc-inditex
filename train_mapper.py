@@ -1,3 +1,24 @@
+'''
+Train Domain Mapper, which is a neural network that maps embeddings from the bundle domain to the product domain.
+Nothing fancy, just a simple one-layer residual network with dropout and a learnable temperature. The idea is to 
+serve as an adapter from the GR-Lite embeddings (bundle domain) to the catalog embeddings (product domain).
+
+This allows us to train and iterate much faster than fine-tuning the whole GR-Lite model, which is huge. This is key in 
+a hackathon, to be able to deploy new iterations quickly and test performance.
+
+Training techniques used:
+- Online Hard Negative Mining (OHNM); selects the top-15% hardest negatives to train on. 
+    This gives better embeddings by concentrating on the most difficult examples, which serves a double purpose:
+    1. It forces the model to learn the subtle differences between similar items, which is crucial for 
+    distinguishing between different products in the same category.
+    2. It prevents the model from overfitting to easy examples, which can lead to poor generalization performance.
+- XBM (Cross-Batch Memory); uses a memory bank of past embeddings to increase the number of negatives. This is pretty crazy honestly, 
+    it's like a memory of past batches that the model can use to learn from. It gave me he final points to achieve the 71% score.
+- Label Smoothing; avoids the model from collapsing by replacing hard labels [0,1,2,3, etc] with soft, mixed targets
+- MixUp (mix two embeddings with 30% probability to make the space of embeddings "transitable")
+- Stochastic Weight Averaging LR scheduler; averages the weights of the last 30% of epochs to improve generalization
+'''
+
 import os
 import torch
 import torch.nn as nn
@@ -108,7 +129,7 @@ def memory_bank_loss(preds, targets, memory_bank, logit_scale, margin=0.1, smoot
 
 
 def train_super_mapper(X_bundles, Y_products, epochs=600, lr=3e-4):
-    """Entrena el SuperDomainMapper con MixUp (alpha=0.2), OHNM (top-15%) y OneCycleLR."""
+    """Entrena el SuperDomainMapper con MixUp (alpha=0.2), online hard negative mining (top-15%), label smoothing y OneCycleLR."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     mapper = SuperDomainMapper().to(device)
     optimizer = optim.AdamW(mapper.parameters(), lr=lr, weight_decay=1e-3)

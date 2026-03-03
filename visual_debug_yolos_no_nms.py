@@ -1,3 +1,9 @@
+'''Create an image displaying bundle + detections + found products + ground truth products.
+
+This is useful for debugging and understanding the model's performance, and where it falls short.
+Also, a project with no "tangible" results is much less accessible to judges and curious people like you that are reading this.
+'''
+
 import os
 import random
 import torch
@@ -166,21 +172,12 @@ def main():
         
         filtered_preds = []
         if USE_NMS:
-            def compute_iou(boxA, boxB):
-                xA = max(boxA[0], boxB[0])
-                yA = max(boxA[1], boxB[1])
-                xB = min(boxA[2], boxB[2])
-                yB = min(boxA[3], boxB[3])
-                interArea = max(0, xB - xA) * max(0, yB - yA)
-                boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-                boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-                if float(boxAArea + boxBArea - interArea) == 0: return 0
-                return interArea / float(boxAArea + boxBArea - interArea)
+            from compare_models import compute_iou_router
                 
             for pred in raw_preds:
                 keep = True
                 for kept in filtered_preds:
-                    if compute_iou(pred["box"], kept["box"]) > NMS_IOU_THRESHOLD:
+                    if compute_iou_router(pred["box"], kept["box"]) > NMS_IOU_THRESHOLD:
                         keep = False
                         break
                 if keep:

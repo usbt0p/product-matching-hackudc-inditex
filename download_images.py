@@ -1,3 +1,28 @@
+'''Download images from the dataset.
+
+Expects the following CSV files in the data_csvs/ folder:
+- bundles_dataset.csv
+- product_dataset.csv
+
+With this format:
+
+```bundles_dataset.csv
+bundle_asset_id,bundle_id_section,bundle_image_url
+B_dc4cb6c331e3,2,https://<url>
+B_0115d9356e71,1,https://<url>
+B_356f9aad7c3e,1,https://<url>
+B_a5edb4861ebe,3,https://<url>
+```
+
+```product_dataset.csv
+product_asset_id,product_image_url,product_description
+I_881901188071,https://<url>,HAND BAG-RUCKSACK
+I_f052906c12b9,https://<url>,FLAT SHOES
+I_4e2056ae9d96,https://<url>,TROUSERS
+I_d3e8b8b3a6f1,https://<url>,T-SHIRT
+```
+'''
+
 import os
 import pandas as pd
 import requests

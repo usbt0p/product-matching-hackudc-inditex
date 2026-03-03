@@ -1,3 +1,17 @@
+'''Precompute DINO macro-regions for test bundles.
+
+Expects the following CSV files in the data_csvs/ folder:
+- bundles_product_match_test.csv
+
+Macro regions are general body regions used to divide the image into four sections for posterior filtering,
+for example filtering out the upper body if the product is a shoe. The regions are:
+- UPPER
+- LOWER
+- FEET
+- ACCESSORIES
+- HEAD
+
+'''
 import os
 import torch
 import json

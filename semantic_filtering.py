@@ -1,3 +1,15 @@
+'''Semantic filtering for catalog and test bundles.
+
+This script does the following:
+1. Precomputes metadata for the catalog, mapping each product to its inferred section and body zone.
+2. Extracts macro regions from test bundles using Grounding DINO (using a simple prompt like "head. upper body. lower body. feet. bag.").
+3. Assigns the macro body zone to each YOLO crop in the test bundles.
+4. Computes the intersection over union (IoU) between the macro body zone and the YOLO crop.
+5. Filters out the YOLO crops that are not in the same body zone as the macro body zone.
+
+Finally, it saves the filtered YOLO crops to a CSV file.
+'''
+
 import pandas as pd
 import numpy as np
 import torch

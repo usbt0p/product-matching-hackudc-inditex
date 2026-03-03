@@ -13,6 +13,8 @@ from tqdm import tqdm
 from ultralytics import YOLO
 import warnings
 
+from run_gr_lite import get_embeddings, load_gr_lite
+
 warnings.filterwarnings("ignore")
 
 from torch.optim.swa_utils import AveragedModel, SWALR
@@ -265,45 +267,6 @@ def train_xbm_mapper(X_bundles, Y_products, epochs=500, lr=3e-4, mem_size=8192):
 
     torch.optim.swa_utils.update_bn(loader, swa_model)
     return swa_model.module
-
-def load_gr_lite(device):
-    load_dotenv()
-    token = os.getenv("HF_TOKEN")
-    if not token:
-        print("No HF_TOKEN found in .env")
-        return None, None
-    try:
-        config = AutoConfig.from_pretrained('facebook/dinov3-vitl16-pretrain-lvd1689m', token=token.strip(), trust_remote_code=True)
-        processor = AutoImageProcessor.from_pretrained('facebook/dinov3-vitl16-pretrain-lvd1689m', token=token.strip(), trust_remote_code=True)
-        model = AutoModel.from_config(config, trust_remote_code=True)
-        d = torch.load('gr_lite.pt', map_location='cpu')
-        
-        gr_dict = {}
-        for k, v in d.items():
-            if k.startswith('model.model.'):
-                gr_dict[k.replace('model.model.', '', 1)] = v
-            elif k.startswith('model.'):
-                gr_dict[k.replace('model.', '', 1)] = v
-            else:
-                gr_dict[k] = v
-                
-        model.load_state_dict(gr_dict, strict=False)
-        model = model.to(device)
-        model.eval()
-        return model, processor
-    except Exception as e:
-        print(f"Failed to assemble GR-Lite: {e}")
-        return None, None
-
-def get_embeddings(model, processor, images, device):
-    inputs = processor(images=images, return_tensors="pt").to(device)
-    with torch.no_grad():
-        outputs = model(**inputs)
-        if hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
-            embs = outputs.pooler_output
-        else:
-            embs = outputs.last_hidden_state.mean(dim=1)
-    return embs.cpu().numpy()
 
 def main(epochs):
     device = "cuda" if torch.cuda.is_available() else "cpu"

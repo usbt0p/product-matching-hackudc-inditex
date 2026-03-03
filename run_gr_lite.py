@@ -1,3 +1,10 @@
+'''Run GR-Lite embeddings for catalog and test bundles. Automatically caches embeddings for each catalog item at first run.
+Also holds useful functions used along the way, for loading the model, getting its embeddings, etc.
+
+Finally, it does a naive nearest neighbors search between the test bundle embeddings and the catalog embeddings to find the best matches.
+This serves as a baseline and also as a first-time sanity check.
+'''
+
 import os
 import time
 import torch
@@ -15,9 +22,7 @@ def load_gr_lite(device):
     load_dotenv()
     token = os.getenv("HF_TOKEN")
     if not token:
-        print("No HF_TOKEN found in .env, skipping GR-Lite")
-        return None, None
-    
+        raise ValueError("No HF_TOKEN found in .env")
     try:
         config = AutoConfig.from_pretrained('facebook/dinov3-vitl16-pretrain-lvd1689m', token=token.strip(), trust_remote_code=True)
         processor = AutoImageProcessor.from_pretrained('facebook/dinov3-vitl16-pretrain-lvd1689m', token=token.strip(), trust_remote_code=True)
@@ -38,8 +43,7 @@ def load_gr_lite(device):
         model.eval()
         return model, processor
     except Exception as e:
-        print(f"Failed to assemble GR-Lite: {e}")
-        return None, None
+        raise RuntimeError(f"Failed to assemble GR-Lite: {e}")
 
 def get_embeddings(model, processor, images, device):
     inputs = processor(images=images, return_tensors="pt").to(device)
@@ -149,7 +153,7 @@ def main(use_lora: bool = False):
     submission_rows_top15 = []
     submission_rows_top5 = []
     
-    batch_size = 16
+    batch_size = 32
     for i in tqdm(range(0, len(test_bundle_ids), batch_size), desc="Bundles"):
         batch_bids = test_bundle_ids[i:i+batch_size]
         batch_imgs = []

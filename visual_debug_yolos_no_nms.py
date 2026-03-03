@@ -3,41 +3,20 @@ import random
 import torch
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont 
 import math
-from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, AutoImageProcessor, AutoModelForObjectDetection, AutoConfig, AutoModel
+from transformers import (
+    AutoProcessor, AutoModelForZeroShotObjectDetection, AutoImageProcessor, 
+    AutoModelForObjectDetection, AutoConfig, AutoModel
+)
 from dotenv import load_dotenv
 from tqdm import tqdm
+
 from semantic_filtering import SemanticFilter
+from run_gr_lite import get_embeddings, load_gr_lite
 
 import warnings
 warnings.filterwarnings("ignore")
-
-def load_gr_lite(device):
-    load_dotenv()
-    token = os.getenv("HF_TOKEN")
-    if not token:
-        print("No HF_TOKEN found in .env, skipping GR-Lite")
-        return None, None
-    config = AutoConfig.from_pretrained('facebook/dinov3-vitl16-pretrain-lvd1689m', token=token, trust_remote_code=True)
-    processor = AutoImageProcessor.from_pretrained('facebook/dinov3-vitl16-pretrain-lvd1689m', token=token, trust_remote_code=True)
-    model = AutoModel.from_config(config, trust_remote_code=True)
-    d = torch.load('gr_lite.pt', map_location='cpu')
-    gr_dict = {k.replace('model.model.', '').replace('model.', ''): v for k, v in d.items()}
-    model.load_state_dict(gr_dict, strict=False)
-    model = model.to(device)
-    model.eval()
-    return model, processor
-
-def get_embeddings(model, processor, images, device):
-    inputs = processor(images=images, return_tensors="pt").to(device)
-    with torch.no_grad():
-        outputs = model(**inputs)
-        if hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
-            embs = outputs.pooler_output
-        else:
-            embs = outputs.last_hidden_state.mean(dim=1)
-    return embs.cpu().numpy()
 
 def create_mosaic(images_or_paths, pids, gt_pids, max_cols=5, img_size=(250, 350)):
     if not images_or_paths:

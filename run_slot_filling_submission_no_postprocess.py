@@ -37,6 +37,7 @@ from ultralytics import YOLO
 import warnings
 import json
 from semantic_filtering import SemanticFilter
+from run_gr_lite import get_embeddings
 
 from train_mapper import ResidualDomainMapper
 
@@ -125,17 +126,6 @@ def load_gr_lite(device):
     except Exception as e:
         print(f"Failed to assemble GR-Lite: {e}")
         return None, None
-
-def get_embeddings(model, processor, images, device):
-    inputs = processor(images=images, return_tensors="pt").to(device)
-    with torch.no_grad():
-        outputs = model(**inputs)
-        if hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
-            embs = outputs.pooler_output
-        else:
-            embs = outputs.last_hidden_state.mean(dim=1)
-    
-    return embs.cpu().numpy()
 
 def main(alpha_query=False, use_lora=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"

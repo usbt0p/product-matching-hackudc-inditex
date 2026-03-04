@@ -5,7 +5,8 @@
 > 
 > Ver detalles en [docs/RETO.md](docs/RETO.md), o [en el sitio web del HackUDC 2026](https://live.hackudc.gpul.org/challenges/).
 
-> [!TIP] 🌐 [English version available in docs/README_EN.md](docs/README_EN.md)
+> [!TIP] 
+> 🌐 [English version available in docs/README_EN.md](docs/README_EN.md)
 
 ---
 

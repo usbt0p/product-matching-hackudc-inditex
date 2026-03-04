@@ -82,6 +82,11 @@ echo "HF_TOKEN=hf_..." > .env
 ```
 
 ```bash
+# Descargar imagenes la primera vez a partir de los csv de competición
+# desgraciadamente creo que no son open source, quizás tengas que scrappear
+# mira en docs/csv-format-samples/ para el formato de csvs
+python download_images.py
+
 # Precomputar embeddings del catálogo (una vez)
 python run_gr_lite.py
 
@@ -100,6 +105,8 @@ python visual_prediction_debug.py
 # Y para ver detecciones y su agregacion con el slot filling router
 python compare_models.py
 ```
+
+Si no tienes los datos, quizás te interese scrappearlos... Siempre respetando los términos de servicio de la web y rate limits, claro. En [docs/csv-format-samples/](docs/csv-format-samples/) tienes un ejemplo de cómo son los csv de competición.
 
 ---
 

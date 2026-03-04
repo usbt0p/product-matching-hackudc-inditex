@@ -6,7 +6,7 @@
 > Ver detalles en [docs/RETO.md](docs/RETO.md), o [en el sitio web del HackUDC 2026](https://live.hackudc.gpul.org/challenges/).
 
 > [!TIP] 
-> 🌐 [English version available in docs/README_EN.md](docs/README_EN.md)
+> 🌐 [English version](docs/README_EN.md) and [spanish PDF of the readme](docs/README.pdf) available in [docs/](docs/)
 
 ---
 
@@ -112,7 +112,7 @@ Si no tienes los datos, quizás te interese scrappearlos... Siempre respetando l
 
 ## Pipeline de funcionamiento
 
-El pipeline sigue un diseño orientado a búsqueda. Cada bundle es una "consulta", cada crop detectado es una "sub-consulta", y el catálogo es el "índice" sobre el que buscamos.
+El pipeline sigue un diseño orientado a búsqueda. Cada bundle es una "consulta", cada crop detectado es una "sub-consulta", y el catálogo es el "índice" sobre el que buscamos (si no se rendiza el diagrama, puedes verlo en [docs/pipeline.png](docs/pipeline.png)):
 
 ```mermaid
 flowchart LR
@@ -150,7 +150,7 @@ flowchart LR
 **Slot Filling (round-robin)**: En lugar de dar los 15 primeros resultados de la query más confiada (que podrían ser 15 variantes del mismo producto, o de un producto muy fácil de detectar), se toma de manera rotativa 1 predicción de cada crop. Así si hay 4 prendas, las 15 predicciones finales estarán distribuidas entre todas. Esto evita desperdiciar el presupuesto de Recall@15. El problema es que si una prenda no es la más obvia por similitud, y hay varias detecciones en el bundle, es posible que no se le de oportunidad de salir.
 
 
-Esta es la arquitectura de la red neuronal del SuperDomainMapper:
+Esta es la arquitectura de la red neuronal del SuperDomainMapper (si no se renderiza, puedes verla en [docs/nn_arch.png](docs/nn_arch.png)):
 
 ```mermaid
 flowchart LR

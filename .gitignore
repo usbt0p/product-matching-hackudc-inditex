@@ -22,6 +22,8 @@ __pycache__
 !imgs/3.png
 !imgs/4.png
 !imgs/results.png
+!imgs/nn_arch.png
+!imgs/pipeline.png
 
 *.json
 *.log

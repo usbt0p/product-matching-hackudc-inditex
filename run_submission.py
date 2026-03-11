@@ -324,15 +324,10 @@ def main(alpha_query=False, use_lora=False):
             
             sims = np.dot(normalized_catalog, normalized_emb).flatten()
 
-            # Garbage filter: skip crops where even the best catalog match is too weak
-            # (farolas, fondos, bolsos ajenos). Threshold on raw cosine before cubing.
-            if np.max(sims) < 0.20:
-                continue
-
             # Similarity sharpening: x^3 amplifies the gap between confident top-1
             # and uncertain lower-ranked items. Safe because sims ∈ [-1,1] and the
             # mapper output is normalized — in practice almost all values are > 0.
-            sims = sims ** 3
+            # sims = sims ** 3
 
             # Temporal Proximity Weighting
             current_bundle_ts = bundle_ts_map.get(bid, 0)

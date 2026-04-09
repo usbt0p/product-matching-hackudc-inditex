@@ -65,8 +65,6 @@ Quick map of what each script does, since the structure is a bit chaotic. If you
 
 ## Setup
 
-> Heads up! I've refactored the code but haven't had time to test it yet — there might be small issues, though they should be easy to fix.
-
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -115,7 +113,7 @@ flowchart LR
     GRLITE --> DM["DomainMapper<br/>bundle → catalog"]
     DM --> SIM["Dot product<br/>with catalog"]
 
-    SIM --> SCORE["Scoring stack:<br/>1. Garbage filter<br/>2. sim³ sharpening<br/>3. Temporal weighting<br/>4. Semantic filtering"]
+    SIM --> SCORE["Scoring stack:<br/>1. Temporal weighting<br/>2. Semantic filtering"]
 
     SCORE --> RR["Slot Filling<br/>round-robin"]
     RR --> OUT(["🏆 Top-15"])
@@ -179,8 +177,6 @@ flowchart LR
 
 ### 🔎 Search & scoring
 
-- **Similarity sharpening** (`sim^3`): cubing similarities amplifies the gap between confident and mediocre candidates. Safe because normalized embeddings have positive similarities in practice, so cubing doesn't flip signs. Had little impact in practice — kept it as a late-stage idea.
-- **Garbage filter**: if the maximum similarity of a crop against the entire catalog is < 0.20, the crop is discarded. Filters background crops, non-clothing elements (lampposts, floors), or overly noisy images.
 - **Temporal Proximity Weighting**: Inditex CDN URLs contain a timestamp (`ts=`) indicating the collection. A Gaussian decay (σ ≈ 1 month) is applied to the temporal difference between the bundle and each product. Temporally close garments receive a bonus, others a penalty. Surprisingly important for the final score — feels a little like cheating, but hey.
 - **Alpha Query Expansion (AQE / α-QE)**: refines the query embedding by averaging it with its K nearest neighbors in the catalog before the final search. Pulls the query toward the center of the correct cluster. Implemented but **did not improve** consistently in practice — not used in the final submission.
 

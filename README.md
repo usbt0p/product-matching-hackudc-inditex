@@ -72,8 +72,6 @@ Aquí tienes un mapa rápido de lo que hace cada script, ya que la estructura en
 
 ## Setup
 
-> Aviso!! He refactorizado el código para que sea pero no he tenido tiempo de probarlo, puede que haya algún fallo pero debería ser facil de arreglar.
-
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -129,7 +127,7 @@ flowchart LR
     GRLITE --> DM["DomainMapper<br/>bundle → catálogo"]
     DM --> SIM["Dot product<br/>con catálogo"]
 
-    SIM --> SCORE["Scoring stack:<br/>1. Garbage filter<br/>2. sim³ sharpening<br/>3. Temporal weighting<br/>4. Semantic filtering"]
+    SIM --> SCORE["Scoring stack:<br/>1. Temporal weighting<br/>2. Semantic filtering"]
 
     SCORE --> RR["Slot Filling<br/>round-robin"]
     RR --> OUT(["🏆 Top-15"])
@@ -145,7 +143,7 @@ flowchart LR
 
 **Por qué DINO para las cajas macro**: YOLO detecta bien las prendas individuales (micro-crops), pero no sabe si una manga larga es "upper body" o si unas zapatillas son "feet". Grounding DINO con un prompt de texto (`"upper body. lower body. feet. head. bag."`) identifica regiones corporales y permite asignar una zona semántica a cada crop de YOLO por intersección (IoU).
 
-**Scoring stack**: La similaridad coseno cruda no es perfecta. En teoría, el cubo (`sim^3`) amplifica la diferencia entre el top-1 seguro y los candidatos mediocres aunque esto tuvo poco impacto según mis experimentos. El filtro temporal en cambio sumó unos sólidos 2-3 puntos de recall (gracias a Sergio de goofyTex por decírmelo) y explota el hecho de que los timestamps en las URLs de Inditex correlacionan con la colección, y las prendas de la misma colección son más probables de aparecer juntas en un bundle. El filtro semántico impide que un crop de zapatos devuelva camisetas.
+**Scoring stack**: La similaridad coseno cruda no es perfecta. En teoría, el cubo (`sim^3`) amplifica la diferencia entre el top-1 seguro y los candidatos mediocres aunque esto tuvo poco impacto según mis experimentos, por lo que está comentado. El filtro temporal en cambio sumó unos sólidos 2-3 puntos de recall (gracias a Sergio de goofyTex por decírmelo) y explota el hecho de que los timestamps en las URLs de Inditex correlacionan con la colección, y las prendas de la misma colección son más probables de aparecer juntas en un bundle. El filtro semántico impide que un crop de zapatos devuelva camisetas.
 
 **Slot Filling (round-robin)**: En lugar de dar los 15 primeros resultados de la query más confiada (que podrían ser 15 variantes del mismo producto, o de un producto muy fácil de detectar), se toma de manera rotativa 1 predicción de cada crop. Así si hay 4 prendas, las 15 predicciones finales estarán distribuidas entre todas. Esto evita desperdiciar el presupuesto de Recall@15. El problema es que si una prenda no es la más obvia por similitud, y hay varias detecciones en el bundle, es posible que no se le de oportunidad de salir.
 
@@ -194,8 +192,6 @@ flowchart LR
 
 ### 🔎 Búsqueda y scoring
 
-- **Similarity sharpening** (`sim^3`): el cubo de las similitudes amplifica la separación entre candidatos confiados y mediocres. Seguro porque los embeddings normalizados tienen similitudes positivas en la práctica y no hay riesgo de que se vuelva negativo con el cubo. Esto no tuvo mucho impacto, lo mantuve porque fue una idea de ultima hora.
-- **Garbage filter**: si el máximo de similitud de un crop con todo el catálogo es < 0.20, se descarta ese crop. Filtra recortes de fondo, elementos no-ropa (farolas, suelo) o imágenes demasiado ruidosas.
 - **Temporal Proximity Weighting**: las URLs del CDN de Inditex contienen un timestamp (`ts=`) que indica la colección. Se aplica un decaimiento gaussiano (σ ≈ 1 mes) sobre la diferencia temporal entre el bundle y cada producto. Las prendas sincrónicamente cercanas reciben un bonus, las de otras colecciones una penalización. Sorprendentemente importante para la puntuación final, se siente un poco como hacer trampa pero bueno.
 - **Alpha Query Expansion (AQE / α-QE)**: refina el embedding de la query promediándolo con sus K vecinos más cercanos del catálogo antes de hacer la búsqueda final. Arrastra la query hacia el centro del cluster correcto. Implementado pero **no mejoró** consistentemente en la práctica, no se usa en la submission final.
 
